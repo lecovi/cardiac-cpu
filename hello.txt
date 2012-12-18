@@ -1,0 +1,15 @@
+Simple CPU Simulator -- Hello World example code:
+
+This is the source code for hello.bin, which you can view in a hex editor:
+
+---------
+jmp 30
+data Hello Simple CPU Simulator!
+ax 2
+int 10
+int 1
+savebin hello.bin
+boot 0
+---------
+
+If you enter in this exact code into the Coder interface, it will generate hello.bin.

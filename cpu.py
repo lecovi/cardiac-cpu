@@ -362,7 +362,8 @@ class CPU(object):
                     self.mem.ptr = self.dx.b
 
 if __name__ == '__main__':
-    import readline
-    c = CPU('bios')
-    cli = Coder(c)
-    cli()
+    #import readline
+    c = CPU('hello.bin')
+    c.run()
+    #cli = Coder(c)
+    #cli()
