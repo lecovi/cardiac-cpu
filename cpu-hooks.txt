@@ -2,7 +2,7 @@ Simple CPU Simulator -- CPU Hooks interface
 
 CPU Hooks can allow custom op-codes to be added and removed like a plugin system.
 For example, say you temporarily add a virtual device attached to the CPU, then later remove it.
-The inserting/removing is controlled in Python and no by the op-codes/coder.
+The inserting/removing is controlled in Python and not by the op-codes/coder.
 
 There is a Base class which must be sub-classed to make hooks work, there is an example Hook provided.
 
@@ -17,6 +17,8 @@ Here is the example HelloWorldHook to see how easy it is to use:
 
 --------------
 class HelloWorldHook(BaseCPUHook):
+    opcode = 60
+    opname = 'hlo'
     def hook_32(self):
         print "Hello World!"
     def hook_33(self):
@@ -28,10 +30,9 @@ class HelloWorldHook(BaseCPUHook):
 --------------
 In the coder interface, you can access both functions via:
 --------------
-set 60
-set 32
-set 60
-set 33
+hlo 32
+hlo 33
+int 1
 boot 0
 --------------
-Note the manual op-codes there.  In the future, I may add the ability to enable the coder to reflect these new op-codes using a custom command to make things easier.
+With this new updated version, you can select the opname along with the opcode in the subclass, and the coder will use it.

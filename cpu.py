@@ -161,6 +161,8 @@ class Coder(object):
         if not isinstance(cpu, CPU):
             raise TypeError
         self.cpu = cpu
+        for hook in self.cpu.cpu_hooks:
+            self.bc_map.update({self.cpu.cpu_hooks[hook].opname: hook})
     def parse(self, c):
         try:
             sp = c.index(' ')
@@ -237,6 +239,8 @@ class BaseCPUHook(object):
         func()
 
 class HelloWorldHook(BaseCPUHook):
+    opcode = 60
+    opname = 'hlo'
     def hook_32(self):
         print "Hello World!"
     def hook_33(self):
@@ -267,9 +271,9 @@ class CPU(object):
         self.mem.ptr = 0
     def savebin(self, filename):
         open(filename, 'wb').write(self.mem.mem.getvalue())
-    def add_cpu_hook(self, klass, opcode):
+    def add_cpu_hook(self, klass):
         hook = klass(self)
-        self.cpu_hooks.update({opcode: hook})
+        self.cpu_hooks.update({hook.opcode: hook})
     def dump(self):
         self.mem.ptr = 0
         for i in range(0, (len(self.mem)/2)-1):
@@ -399,7 +403,7 @@ class CPU(object):
 if __name__ == '__main__':
     #import readline
     c = CPU('hello.bin')
-    #c.add_cpu_hook(HelloWorldHook, 60)
+    #c.add_cpu_hook(HelloWorldHook)
     c.run()
     #cli = Coder(c)
     #cli()
