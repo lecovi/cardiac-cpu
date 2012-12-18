@@ -224,6 +224,28 @@ class Coder(object):
                 break
         self.cpu.savebin('dump')
 
+class BaseCPUHook(object):
+    def __init__(self, cpu):
+        if not isinstance(cpu, CPU):
+            raise TypeError
+        self.cpu = cpu
+    def __call__(self, i):
+        try:
+            func = getattr(self, "hook_%d" % i)
+        except AttributeError:
+            raise InvalidInterrupt("HOOK %d is not defined." % i)
+        func()
+
+class HelloWorldHook(BaseCPUHook):
+    def hook_32(self):
+        print "Hello World!"
+    def hook_33(self):
+        print "Current Register values:"
+        print self.cpu.ax.b
+        print self.cpu.bx.b
+        print self.cpu.cx.b
+        print self.cpu.dx.b
+
 class InvalidInterrupt(Exception):
     pass
 
@@ -236,6 +258,7 @@ class CPU(object):
         self.mem = Memory(64)
         self.storage = Storage('storage', 4096)
         self.imem = Memory(1024)
+        self.cpu_hooks = {}
         if filename != None:
             self.loadbin(filename)
     def loadbin(self, filename):
@@ -244,6 +267,9 @@ class CPU(object):
         self.mem.ptr = 0
     def savebin(self, filename):
         open(filename, 'wb').write(self.mem.mem.getvalue())
+    def add_cpu_hook(self, klass, opcode):
+        hook = klass(self)
+        self.cpu_hooks.update({opcode: hook})
     def dump(self):
         self.mem.ptr = 0
         for i in range(0, (len(self.mem)/2)-1):
@@ -367,10 +393,13 @@ class CPU(object):
             elif op == 16:
                 if self.cx != self.mem.read():
                     self.mem.ptr = self.dx.b
+            elif self.cpu_hooks.has_key(op):
+                self.cpu_hooks[op](self.mem.read().b)
 
 if __name__ == '__main__':
     #import readline
     c = CPU('hello.bin')
+    #c.add_cpu_hook(HelloWorldHook, 60)
     c.run()
     #cli = Coder(c)
     #cli()
