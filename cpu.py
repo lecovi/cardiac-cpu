@@ -224,6 +224,9 @@ class Coder(object):
                 break
         self.cpu.savebin('dump')
 
+class InvalidInterrupt(Exception):
+    pass
+
 class CPU(object):
     ax = Unit()
     bx = Unit()
@@ -248,70 +251,74 @@ class CPU(object):
     def do_int(self, i):
         if i == 1:
             return 1
-        elif i == 2:
-            print "CPU: Screen support not implemented."
-        elif i == 3:
-            sys.stdout.write("%s" % self.ax.c)
-        elif i == 4:
-            print "CPU: Screen support not implemented."
-        elif i == 5:
-            self.mem.memcopy(self.ax.b, self.bx.b, self.cx.b)
-        elif i == 6:
-            self.mem.memclear(self.ax.b, self.cx.b)
-        elif i == 7:
-            self.storage.ptr = self.ax.b
-        elif i == 8:
-            ptr = self.mem.ptr
-            self.mem.ptr = self.ax.b
-            self.mem.write(self.storage.read(self.cx.b))
-            self.mem.ptr = ptr
-        elif i == 9:
-            ptr = self.mem.ptr
-            self.mem.ptr = self.ax.b
-            self.storage.write(self.mem.read(self.cx.b))
-            self.mem.ptr = ptr
-        elif i == 10:
-            ptr = self.mem.ptr
-            self.mem.ptr = self.ax.b
-            print self.mem.readstring()
-            self.mem.ptr = ptr
-        elif i == 11:
-            print "Single key input not implemented."
-            self.mem[self.cx.b] = 'A'
-        elif i == 12:
-            ptr = self.mem.ptr
-            self.mem.ptr = self.ax.b
-            s = raw_input()
-            for c in s:
-                self.mem.write(ord(c))
-            self.mem.write(0)
-            self.cx.value = len(s)
-            self.mem.ptr = ptr
-        elif i == 40:
-            ptr = self.mem.ptr
-            self.mem.ptr = self.ax.b
-            self.imem.ptr = self.bx.b
-            self.imem.write(self.mem.read(self.cx.b))
-            self.mem.memclear(self.ax.b, self.cx.b)
-            self.mem.ptr = ptr
-        elif i == 41:
-            ptr = self.mem.ptr
-            self.imem.ptr = self.ax.b
-            self.mem.ptr = self.bx.b
-            self.mem.write(self.imem.read(self.cx.b))
-            self.imem.memclear(self.ax.b, self.cx.b)
-            self.mem.ptr = ptr
-        elif i == 42:
-            self.imem.ptr = self.ax.b
-            self.storage.write(self.imem.read(self.cx.b))
-        elif i == 43:
-            self.imem.ptr = self.ax.b
-            self.imem.write(self.storage.read(self.cx.b))
-        elif i == 255:
-            self.savebin('dump')
-            cli = Coder(self)
-            cli()
-        return 0
+        try:
+            func = getattr(self, "int_%d" % i)
+        except AttributeError:
+            raise InvalidInterrupt("INT %d is not defined." % i)
+        func()
+    def int_2(self):
+        print "CPU: Screen support not implemented."
+    def int_3(self):
+        sys.stdout.write("%s" % self.ax.c)
+    def int_4(self):
+        print "CPU: Screen support not implemented."
+    def int_5(self):
+        self.mem.memcopy(self.ax.b, self.bx.b, self.cx.b)
+    def int_6(self):
+        self.mem.memclear(self.ax.b, self.cx.b)
+    def int_7(self):
+        self.storage.ptr = self.ax.b
+    def int_8(self):
+        ptr = self.mem.ptr
+        self.mem.ptr = self.ax.b
+        self.mem.write(self.storage.read(self.cx.b))
+        self.mem.ptr = ptr
+    def int_9(self):
+        ptr = self.mem.ptr
+        self.mem.ptr = self.ax.b
+        self.storage.write(self.mem.read(self.cx.b))
+        self.mem.ptr = ptr
+    def int_10(self):
+        ptr = self.mem.ptr
+        self.mem.ptr = self.ax.b
+        print self.mem.readstring()
+        self.mem.ptr = ptr
+    def int_11(self):
+        print "Single key input not implemented."
+        self.mem[self.cx.b] = 'A'
+    def int_12(self):
+        ptr = self.mem.ptr
+        self.mem.ptr = self.ax.b
+        s = raw_input()
+        for c in s:
+            self.mem.write(ord(c))
+        self.mem.write(0)
+        self.cx.value = len(s)
+        self.mem.ptr = ptr
+    def int_40(self):
+        ptr = self.mem.ptr
+        self.mem.ptr = self.ax.b
+        self.imem.ptr = self.bx.b
+        self.imem.write(self.mem.read(self.cx.b))
+        self.mem.memclear(self.ax.b, self.cx.b)
+        self.mem.ptr = ptr
+    def int_41(self):
+        ptr = self.mem.ptr
+        self.imem.ptr = self.ax.b
+        self.mem.ptr = self.bx.b
+        self.mem.write(self.imem.read(self.cx.b))
+        self.imem.memclear(self.ax.b, self.cx.b)
+        self.mem.ptr = ptr
+    def int_42(self):
+        self.imem.ptr = self.ax.b
+        self.storage.write(self.imem.read(self.cx.b))
+    def int_43(self):
+        self.imem.ptr = self.ax.b
+        self.imem.write(self.storage.read(self.cx.b))
+    def int_255(self):
+        self.savebin('dump')
+        cli = Coder(self)
+        cli()
     def run(self, ptr=0):
         self.mem.ptr = ptr
         exitcode = 0
