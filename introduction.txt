@@ -18,6 +18,24 @@ CPU Klass:
     c.run()
   You can add a parameter into run() to tell it where to start executing, say if your binary file has a header.
 
+InvalidInterrupt Exception:
+  This exception is raised if your binary code attempts to call an unhandled interrupt.
+
+HelloWorldHook Klass(sub-class of BaseCPUHook):
+  This is an example CPU Hook to display how a hook is created and used, it provided 2 functions to your binary.
+  This CPU hook is attached to CPU op-code 60, and the op-code used in the Coder is 'hlo'.
+  Function 32 just displays hello world to standard output.
+  Function 33 is an example of a debugging function which displays the current state of the CPU registers.
+
+BaseCPUHook Klass:
+  This class is intended to be extended with your own CPU Hook code.  Please see HelloWorldHook as an example.
+  To attach a hook to a CPU in your Python code:
+    c = CPU('myapp')
+    c.add_cpu_hook(MyAwesomeHook)
+    c.run()
+  You must define in your CPU Hook which op-code to attach to, and which op-name it can be referenced as in the Coder.
+  If you never wish to use the coder with this hook, and are using a standard hex-editor, then you can omit the opname attribute.
+
 Coder Klass:
   This class implements a command-line interface to create binary files and debug them.  See the documentation on how to use the various commands available.
   Example to load a binary file and immediately jump into the debugger with it:
