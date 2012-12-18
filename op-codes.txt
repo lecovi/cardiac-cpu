@@ -1,0 +1,52 @@
+Simple CPU Simulator -- included CPU OP-CODES:
+
+INT:
+  byte-code: 1
+  Next byte should be the interrupt to call.
+  See the sample-interrupts.txt for list of possible interrupts.
+AX:
+  byte-code: 2
+  AX register is set to the next read byte in memory.
+BX:
+  byte-code: 3
+  BX register is set to the next read byte in memory.
+CX:
+  byte-code: 4
+  CX register is set to the next read byte in memory.
+DX:
+  byte-code: 5
+  DX register is set to the next read byte in memory.
+JMP:
+  byte-code: 6
+  Set CPU Memory pointer to the next read byte in memory.
+PUSH:
+  byte-code: 7
+  Store the current CPU Memory pointer for a later use.
+POP:
+  byte-code: 8
+  Restore the previously stored CPU Memory pointer.
+CALL:
+  byte-code: 9
+  PUSHes the next to execute CPU Memory pointer, then performs a JMP using the next read byte.
+CX++:
+  byte-code: 10
+  Increments CX by 1.
+CX--:
+  byte-code: 11
+  Decreases CX by 1.
+ADDCX:
+  byte-code: 12
+  Increments CX by the next read byte.
+SUBCX:
+  byte-code: 13
+  Decreases CX by the next read byte.
+USE:
+  byte-code: 14
+  Sets CX to the byte stored at CPU Memory pointer stored in CX...
+  I know it sounds confusing, and it sort of is.  It's used with the IFs mainly.
+IF=:
+  byte-code: 15
+  If CX equals the value in the next read byte, then set the CPU Memory pointer to DX.
+IF!:
+  byte-code: 16
+  If CX does not equals the value in the next read byte, then set the CPU Memory pointer to DX.

@@ -1,0 +1,71 @@
+Simple CPU Simulator -- Simple Int table:
+
+INT 1:
+  Terminate current code
+  No Parameters
+INT 2:
+  Screen clearing command
+  Not currently implemented in the Python version.
+INT 3:
+  Print a single character to stdout
+  AX: The Character byte to print.
+INT 4:
+  Screen character coloring command
+  Not currently implemented in the Python version.
+INT 5:
+  CPU Memory copying routine.
+  AX: source
+  BX: destination
+  CX: block size
+INT 6:
+  CPU Memory clearing routine.
+  AX: source
+  CX: size
+INT 7:
+  Persistent storage pointer set.
+  AX: byte position in persistent storage to set read/write pointer to.
+INT 8:
+  Copy bytes from persistent storage into CPU Memory.
+  AX: CPU Memory location to store bytes to.
+  CX: Size of block in bytes.
+INT 9:
+  Copy bytes from CPU Memory into persistent storage.
+  AX: CPU Memory location to read bytes from.
+  CX: Size of block in bytes.
+INT 10:
+  Reads a 0-terminated string of bytes from CPU memory and display it on the screen.
+  AX: source
+INT 11:
+  Reads a single key from the keyboard.
+  Not currently implemented in the Python version.
+INT 12:
+  Read raw input from the keyboard and store it in CPU Memory.
+  AX: CPU Memory location to store text to.
+  Returns CX: Length of string stored.
+
+
+Special INTs to store/retrieve data from shared memory:
+(Unlike CPU memory, executable code cannot run in shared memory)
+
+INT 40:
+  Move bytes from CPU Memory into shared memory.
+  AX: source
+  BX: destination
+  CX: size
+INT 41:
+  Move bytes from shared memory back into CPU memory.
+  AX: source
+  BX: destination
+  CX: size
+INT 42:
+  Save data from shared memory into persistent storage.
+  AX: source
+  CX: size
+INT 43:
+  Load data from persistent storage into shared memory.
+  AX: destination
+  CX: size
+
+
+INT 255:
+  Enter the command/debugger from your running code.
