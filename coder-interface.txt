@@ -1,0 +1,38 @@
+Simple CPU Simulator -- Command-line coder interface
+
+The included coding interface is very simple, and takes op-codes.
+From the coder interface, you can directly enter in op-codes, they are not executed, but are written to memory at the current pointer location.
+The current pointer location is determined by the number on the prompt.
+Besides op-codes, there are some special commands which you can use, including some macros:
+
+boot:
+  This will execute the current code in memory.
+  If no parameter is given, it starts execution at the current pointer location.
+string:
+  A macro, which uses the standard INT 3 to print a string to the screen.
+  You should use "data" explained below for very long amounts of text.
+ptr:
+  Sets the current CPU Memory pointer, or displays it if no parameter is specified.
+dump:
+  A handy debugging command which prints the byte at the current pointer location.
+dump+:
+  Same as above, but increments the pointer as well.
+savebin:
+  Save the current CPU Memory image as a 64 byte binary file.
+  Parameter should be the filename to save it as.
+loadbin:
+  Loads a 64 byte binary file into the current CPU Memory, replacing the current data.
+clear:
+  Zeros out the entire CPU Memory and sets the pointer back to 0.
+data:
+  Stores a string directly into CPU Memory at the current pointer location.
+  Use with caution, as this can overrite code and crash the VM if used incorrectly.
+set:
+  A handy debugging command for manually setting the current byte of the pointer location.
+bp:
+  A handy debugging command to set a breakpoint(yes, breakpoints work!)
+  If no parameter is specified, the current pointer location is set as the breakpoint.
+cbp:
+  Clear the previously set breakpoint.
+.:
+  Exit the coder interface, and also dump the current CPU Memory to a binary file "dump".

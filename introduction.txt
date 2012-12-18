@@ -1,0 +1,53 @@
+Simple CPU Simulator -- Introduction
+
+This file is provided as an introduction to how this works internally, please see the other text files for usage.
+
+The CPU core is fully customizable, but if any of the memory sizes are changed, it can break compatibility with other binary files.
+That being said, if your goal of using this code is to build your own virtual machine for your application, then feel free to change the memory sizes to suit your requirements:
+
+CPU Klass:
+  Here you can add new registers, which you will also need to add new op-codes for manipulating them.
+  Default registers use the Unit class to define them.
+  In the __init__ of this class is where the CPU Memory, persistent storage, and shared memory is initialized.
+  mem is a Memory class, using the default size of 64 bytes.  Increase the 64 to increase the size of the binary files and available executable memory.
+  storage is a Storage class, which is a subclass of Memory, using the default size of 4K.  This is the persistent storage which is accessed using a software interrupt.  Various code can storage and access data from here.
+  imem is a Memory class, using the default size of 1K.  This is the shared memory, where executable code can store non-executable data.  If you want to execute data from here, you need to first move it into CPU Memory.
+  The __init__ function also manages the loading of an initial binary file into the CPU itself.
+  Example to load and run a binary file:
+    c = CPU('myapp')
+    c.run()
+  You can add a parameter into run() to tell it where to start executing, say if your binary file has a header.
+
+Coder Klass:
+  This class implements a command-line interface to create binary files and debug them.  See the documentation on how to use the various commands available.
+  Example to load a binary file and immediately jump into the debugger with it:
+    import readline
+    c = CPU('myapp')
+    cli = Coder(c)
+    cli()
+  A CPU instance needs to be passed into the Coder, or it will not work.  You can also pass an empty CPU instance as well, to start a fresh new application.
+
+Storage Klass(sub-class of Memory):
+  This class implements a disk file storage unit for persistent storage.
+  Example:
+    self.storage = Storage('storage', 4096)
+
+Memory Klass:
+  This class is initialized with the size of memory to allocate(using StringIO).
+  There are many functions in this class which control the memory access facility, which the CPU uses.
+  These functions will not be directly edited or used by you, as they are already implemented in the CPU op-codes.
+  Essentually, this class is exposed as an array.  The CPU gets and sets memory locations using array syntax:
+    mem[36] = 4
+  This class also keeps track of the current pointer location, which is used by the CPU for various operations.
+  It is also able to read a null-terminated string with a helper function, which a software interrupt exposes.
+  Other features include the clearing of all memory, local block copying, and local block clearing.
+  Example:
+    self.mem = Memory(64)
+
+Unit Klass:
+  This class I sometimes wonder if I really should have created it and built everything around it...
+  Here, the memory values are stored and validated to prevent Python exceptions.
+  It provides the facility to add and subtract Units or ints, and conditional matching.
+  It controls the attribute setting to prevent values outside the 255 range, which this CPU simulator does not yet support.
+
+Please read the other included text files for more information on how to use this CPU simulator toolkit.
