@@ -1,5 +1,6 @@
 from cStringIO import StringIO
 import sys
+import zlib
 
 class Unit(object):
     def __init__(self, default=0):
@@ -157,10 +158,11 @@ class Coder(object):
         'if=': 15,
         'if!': 16,
     }
-    def __init__(self, cpu):
+    def __init__(self, cpu, compress=False):
         if not isinstance(cpu, CPU):
             raise TypeError
         self.cpu = cpu
+        self.compress = compress
         for hook in self.cpu.cpu_hooks:
             self.bc_map.update({self.cpu.cpu_hooks[hook].opname: hook})
     def parse(self, c):
@@ -202,10 +204,10 @@ class Coder(object):
                 print self.cpu.mem.read().b
             elif op == 'savebin':
                 if arg != '':
-                    self.cpu.savebin(arg)
+                    self.cpu.savebin(arg, self.compress)
             elif op == 'loadbin':
                 if arg != '':
-                    self.cpu.loadbin(arg)
+                    self.cpu.loadbin(arg, self.compress)
             elif op == 'clear':
                 self.cpu.mem.clear()
             elif op == 'data':
@@ -224,7 +226,7 @@ class Coder(object):
                 del self.cpu.bp
             elif op == '.' or self.cpu.mem.eom:
                 break
-        self.cpu.savebin('dump')
+        self.cpu.savebin('dump', self.compress)
 
 class BaseCPUHook(object):
     def __init__(self, cpu):
@@ -258,19 +260,25 @@ class CPU(object):
     bx = Unit()
     cx = Unit()
     dx = Unit()
-    def __init__(self, filename=None):
+    def __init__(self, filename=None, compressed=False):
         self.mem = Memory(64)
         self.storage = Storage('storage', 4096)
         self.imem = Memory(1024)
         self.cpu_hooks = {}
         if filename != None:
-            self.loadbin(filename)
-    def loadbin(self, filename):
+            self.loadbin(filename, compressed=compressed)
+    def loadbin(self, filename, compressed=False):
         self.mem.clear()
-        self.mem.write(open(filename, 'rb').read())
+        if not compressed:
+            self.mem.write(open(filename, 'rb').read())
+        else:
+            self.mem.write(zlib.decompress(open(filename, 'rb').read()))
         self.mem.ptr = 0
-    def savebin(self, filename):
-        open(filename, 'wb').write(self.mem.mem.getvalue())
+    def savebin(self, filename, compress=False):
+        if not compress:
+            open(filename, 'wb').write(self.mem.mem.getvalue())
+        else:
+            open(filename, 'wb').write(zlib.compress(self.mem.mem.getvalue()))
     def add_cpu_hook(self, klass):
         hook = klass(self)
         self.cpu_hooks.update({hook.opcode: hook})
@@ -402,8 +410,8 @@ class CPU(object):
 
 if __name__ == '__main__':
     #import readline
-    c = CPU('hello.bin')
+    c = CPU('hello.bin', True)
     #c.add_cpu_hook(HelloWorldHook)
     c.run()
-    #cli = Coder(c)
+    #cli = Coder(c, True)
     #cli()
