@@ -1,6 +1,11 @@
 from cStringIO import StringIO
 import sys
 import zlib
+try:
+    import termios
+except ImportError:
+    print "termios not loaded, simulation will be limited."
+    termios = None
 
 class Unit(object):
     def __init__(self, default=0):
@@ -295,11 +300,11 @@ class CPU(object):
             raise InvalidInterrupt("INT %d is not defined." % i)
         func()
     def int_2(self):
-        print "CPU: Screen support not implemented."
+        sys.stdout.write('\033[2J\033[0;0H')
     def int_3(self):
         sys.stdout.write("%s" % self.ax.c)
     def int_4(self):
-        print "CPU: Screen support not implemented."
+        sys.stdout.write('\033[1;%dm' % self.ax.b)
     def int_5(self):
         self.mem.memcopy(self.ax.b, self.bx.b, self.cx.b)
     def int_6(self):
@@ -319,11 +324,15 @@ class CPU(object):
     def int_10(self):
         ptr = self.mem.ptr
         self.mem.ptr = self.ax.b
-        print self.mem.readstring()
+        sys.stdout.write(self.mem.readstring())
         self.mem.ptr = ptr
     def int_11(self):
-        print "Single key input not implemented."
-        self.mem[self.cx.b] = 'A'
+        if termios:
+            sys.stdin.flush()
+            self.mem[self.cx.b] = sys.stdin.read(1)
+        else:
+            print "CPU: Single key input not supported on this platform."
+            self.mem[self.cx.b] = 'A'
     def int_12(self):
         ptr = self.mem.ptr
         self.mem.ptr = self.ax.b
@@ -361,6 +370,11 @@ class CPU(object):
         self.mem.ptr = ptr
         exitcode = 0
         sjmp = ptr
+        if termios:
+            attr = termios.tcgetattr(sys.stdin)
+            oldattr = attr[3]
+            attr[3] = attr[3] & ~termios.ICANON
+            termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
         while True:
             if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
             if self.mem.eom: break
@@ -407,6 +421,9 @@ class CPU(object):
                     self.mem.ptr = self.dx.b
             elif self.cpu_hooks.has_key(op):
                 self.cpu_hooks[op](self.mem.read().b)
+        if termios:
+            attr[3] = oldattr
+            termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
 
 if __name__ == '__main__':
     #import readline
