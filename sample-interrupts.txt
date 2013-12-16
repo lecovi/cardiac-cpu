@@ -5,13 +5,13 @@ INT 1:
   No Parameters
 INT 2:
   Screen clearing command
-  Not currently implemented in the Python version.
+  Requires termios Python module support to work.
 INT 3:
   Print a single character to stdout
   AX: The Character byte to print.
 INT 4:
   Screen character coloring command
-  Not currently implemented in the Python version.
+  Requires termios Python module support to work.
 INT 5:
   CPU Memory copying routine.
   AX: source
@@ -37,7 +37,7 @@ INT 10:
   AX: source
 INT 11:
   Reads a single key from the keyboard.
-  Not currently implemented in the Python version.
+  Requires termios Python module support to work.
 INT 12:
   Read raw input from the keyboard and store it in CPU Memory.
   AX: CPU Memory location to store text to.

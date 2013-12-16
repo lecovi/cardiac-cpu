@@ -50,3 +50,6 @@ IF=:
 IF!:
   byte-code: 16
   If CX does not equals the value in the next read byte, then set the CPU Memory pointer to DX.
+SIX:
+  byte-code: 17
+  Enable 16-bit memory locations(still under development use at own risk!)

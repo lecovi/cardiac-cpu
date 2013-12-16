@@ -73,6 +73,7 @@ class Memory(object):
     def __init__(self, size):
         self.mem = StringIO()
         self.size = size
+        self.sixteen = False
         self.clear()
     def clear(self):
         self.mem.seek(0)
@@ -108,10 +109,12 @@ class Memory(object):
         if value < 0 or value > self.size-1:
             raise ValueError
         self.mem.seek(value)
-    def read(self, num=1):
+    def read(self, num=1, force8=False):
         if self.eom:
             print "Memory error: %d" % self.ptr
         if num == 1:
+            if self.sixteen and not force8:
+                return Unit16(self.mem.read(2))
             return Unit(self.mem.read(1))
         return self.mem.read(num)
     def read16(self):
@@ -181,6 +184,7 @@ class Coder(object):
         'use': 14,
         'if=': 15,
         'if!': 16,
+        'six': 17,
     }
     def __init__(self, cpu, compress=False):
         if not isinstance(cpu, CPU):
@@ -226,6 +230,8 @@ class Coder(object):
                 print self.cpu.mem[ptr].b
             elif op == 'dump+':
                 print self.cpu.mem.read().b
+            elif op == 'dump16+':
+                print self.cpu.mem.read16().b
             elif op == 'savebin':
                 if arg != '':
                     self.cpu.savebin(arg, self.compress)
@@ -250,6 +256,10 @@ class Coder(object):
                 del self.cpu.bp
             elif op == '.' or self.cpu.mem.eom:
                 break
+            elif op == 'state':
+                print 'CPU State info:'
+                print 'AX=%s\nBX=%s\nCX=%s\nDX=%s' % (self.cpu.ax.b, self.cpu.bx.b, self.cpu.cx.b, self.cpu.dx.b)
+                print '16-bit mode enable: %s' % ('Yes' if self.cpu.mem.sixteen else 'No')
         self.cpu.savebin('dump', self.compress)
 
 class BaseCPUHook(object):
@@ -297,37 +307,10 @@ class BinLoaderHook(BaseCPUHook):
 class InvalidInterrupt(Exception):
     pass
 
-class CPU(object):
-    ax = Unit()
-    bx = Unit()
-    cx = Unit()
-    dx = Unit()
-    def __init__(self, filename=None, compressed=False):
-        self.mem = Memory(64)
-        self.storage = Storage('storage', 4096)
-        self.imem = Memory(1024)
-        self.cpu_hooks = {}
-        if filename != None:
-            self.loadbin(filename, compressed=compressed)
-    def loadbin(self, filename, compressed=False):
-        self.mem.clear()
-        if not compressed:
-            self.mem.write(open(filename, 'rb').read())
-        else:
-            self.mem.write(zlib.decompress(open(filename, 'rb').read()))
-        self.mem.ptr = 0
-    def savebin(self, filename, compress=False):
-        if not compress:
-            open(filename, 'wb').write(self.mem.mem.getvalue())
-        else:
-            open(filename, 'wb').write(zlib.compress(self.mem.mem.getvalue()))
-    def add_cpu_hook(self, klass):
-        hook = klass(self)
-        self.cpu_hooks.update({hook.opcode: hook})
-    def dump(self):
-        self.mem.ptr = 0
-        for i in range(0, (len(self.mem)/2)-1):
-            print "%d, %d" % (self.mem.read().b, self.mem.read().b)
+class CPUInterrupts(object):
+    """
+    This class is a Mixin to include the main CPU interrupts
+    """
     def do_int(self, i):
         if i == 1:
             return 1
@@ -403,6 +386,19 @@ class CPU(object):
         self.savebin('dump')
         cli = Coder(self)
         cli()
+
+class CPUCore(object):
+    ax = Unit()
+    bx = Unit()
+    cx = Unit()
+    dx = Unit()
+    def add_cpu_hook(self, klass):
+        hook = klass(self)
+        self.cpu_hooks.update({hook.opcode: hook})
+    def dump(self):
+        self.mem.ptr = 0
+        for i in range(0, (len(self.mem)/2)-1):
+            print "%d, %d" % (self.mem.read().b, self.mem.read().b)
     def run(self, ptr=0):
         self.mem.ptr = ptr
         exitcode = 0
@@ -415,9 +411,9 @@ class CPU(object):
         while True:
             if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
             if self.mem.eom: break
-            op = self.mem.read().b
+            op = self.mem.read(force8=True).b
             if op == 1:
-                rt = self.do_int(self.mem.read().b)
+                rt = self.do_int(self.mem.read(force8=True).b)
                 if rt == 1:
                     exitcode = 1
                     break
@@ -456,11 +452,37 @@ class CPU(object):
             elif op == 16:
                 if self.cx != self.mem.read():
                     self.mem.ptr = self.dx.b
+            elif op == 17:
+                self.mem.sixteen = False if self.mem.sixteen else True
             elif self.cpu_hooks.has_key(op):
                 self.cpu_hooks[op](self.mem.read().b)
         if termios:
             attr[3] = oldattr
             termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
+
+class CPU(CPUCore, CPUInterrupts):
+    cpu_memory = 64
+    storage = 4096
+    shared_memory = 1024
+    def __init__(self, filename=None, compressed=False):
+        self.mem = Memory(self.cpu_memory)
+        self.storage = Storage('storage', self.shared_memory) if self.storage > 0 else None
+        self.imem = Memory(self.shared_memory) if self.shared_memory > 0 else None
+        self.cpu_hooks = {}
+        if filename != None:
+            self.loadbin(filename, compressed=compressed)
+    def loadbin(self, filename, compressed=False):
+        self.mem.clear()
+        if not compressed:
+            self.mem.write(open(filename, 'rb').read())
+        else:
+            self.mem.write(zlib.decompress(open(filename, 'rb').read()))
+        self.mem.ptr = 0
+    def savebin(self, filename, compress=False):
+        if not compress:
+            open(filename, 'wb').write(self.mem.mem.getvalue())
+        else:
+            open(filename, 'wb').write(zlib.compress(self.mem.mem.getvalue()))
 
 if __name__ == '__main__':
     import readline
