@@ -8,54 +8,74 @@ except ImportError:
     termios = None
 
 class Unit(object):
-    def __init__(self, default=0):
-        self.value = default
+    """
+    This klass now has a grand purpose!  It will handle the 6/16-bit value storage transparently.
+    """
+    def __init__(self, v1=0, v2=0):
+        if isinstance(v1, int) and isinstance(v2, int) and v2 > 0:
+            object.__setattr__(self, '_value1', v1)
+            object.__setattr__(self, '_value2', v2)
+        else:
+            self.value = v1
     def __setattr__(self, name, value):
         if name == 'value':
             if isinstance(value, str):
                 value = ord(value)
             if isinstance(value, int):
-                if value > 255 or value < 0:
+                if value > 65535 or value < 0:
                     raise ValueError
-                object.__setattr__(self, '_value', value)
+                if value < 256:
+                    # Set an 8-bit value.
+                    object.__setattr__(self, '_value1', value)
+                    object.__setattr__(self, '_value2', 0)
+                else:
+                    # Set a 16-bit value.
+                    object.__setattr__(self, '_value1', value-int(value/256)*256)
+                    object.__setattr__(self, '_value2', int(value/256))
             else:
                 raise TypeError
     def __add__(self, other):
         if isinstance(other, int):
-            return Unit(self._value + other)
+            return Unit(self.w + other)
         elif isinstance(other, Unit):
-            return Unit(self._value + other.b)
+            return Unit(self.w + other.w)
         else:
             raise NotImplemented
     def __sub__(self, other):
         if isinstance(other, int):
-            return Unit(self._value - other)
+            return Unit(self.w - other)
         elif isinstance(other, Unit):
-            return Unit(self._value - other.b)
+            return Unit(self.w - other.w)
         else:
             raise NotImplemented
     def __eq__(self, other):
-        if isinstance(other, int) and self._value == other:
+        if isinstance(other, int) and self.w == other:
             return True
-        elif isinstance(other, Unit) and self._value == other.b:
+        elif isinstance(other, Unit) and self.w == other.w:
             return True
         else:
             return False
     def __ne__(self, other):
-        if isinstance(other, int) and self._value != other:
+        if isinstance(other, int) and self.w != other:
             return True
-        elif isinstance(other, Unit) and self._value != other.b:
+        elif isinstance(other, Unit) and self.w != other.w:
             return True
         else:
             return False
     @property
     def b(self):
         """Get the byte value."""
-        return self._value
+        return self._value1
     @property
     def c(self):
         """Get the ascii value."""
-        return chr(self._value)
+        if self._value2 > 0:
+            return chr(self._value1)+chr(self._value2)
+        return chr(self._value1)
+    @property
+    def w(self):
+        """Get the 16-bit integer value."""
+        return self._value2*256+self._value1
 
 class Memory(object):
     def __init__(self, size):
@@ -96,17 +116,30 @@ class Memory(object):
         if value < 0 or value > self.size-1:
             raise ValueError
         self.mem.seek(value)
-    def read(self, bytes=1):
+    def read(self, num=1):
         if self.eom:
             print "Memory error: %d" % self.ptr
-        if bytes == 1:
+        if num == 1:
             return Unit(self.mem.read(1))
-        return self.mem.read(bytes)
+        return self.mem.read(num)
+    def read16(self):
+        if self.eom:
+            print "Memory error: %d" % self.ptr
+        return Unit(ord(self.mem.read(1)), ord(self.mem.read(1)))
     def write(self, value):
         if isinstance(value, Unit):
             self.mem.write(value.c)
         elif isinstance(value, int):
             self.mem.write(chr(value))
+        elif isinstance(value, str):
+            self.mem.write(value)
+        else:
+            raise ValueError
+    def write16(self, value):
+        if isinstance(value, Unit):
+            self.mem.write(value.c)
+        elif isinstance(value, int):
+            self.mem.write(Unit(value).c)
         elif isinstance(value, str):
             self.mem.write(value)
         else:
@@ -256,6 +289,24 @@ class HelloWorldHook(BaseCPUHook):
         print self.cpu.bx.b
         print self.cpu.cx.b
         print self.cpu.dx.b
+
+class BinLoaderHook(BaseCPUHook):
+    """
+    BinLoaderHook can be used during development to load binary data directly into an attached storage unit.
+    It can also export data from the storage unit directly into an external file.
+    """
+    opcode = 240
+    opname = 'ldr'
+    def get_filename(self):
+        ptr = self.cpu.mem.ptr
+        self.cpu.mem.ptr = self.cpu.ax.b
+        filename = self.cpu.mem.readstring()
+        self.cpu.mem.ptr = ptr
+        return filename
+    def hook_10(self):
+        self.cpu.storage.write(open(self.get_filename(), 'rb').read())
+    def hook_11(self):
+        open(self.get_filename(), 'rb').write(self.cpu.storage.read(self.cpu.cx.b))
 
 class InvalidInterrupt(Exception):
     pass
@@ -426,9 +477,8 @@ class CPU(object):
             termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
 
 if __name__ == '__main__':
-    #import readline
+    import readline
     c = CPU('hello.bin', True)
-    #c.add_cpu_hook(HelloWorldHook)
-    c.run()
-    #cli = Coder(c, True)
-    #cli()
+    c.add_cpu_hook(BinLoaderHook)
+    cli = Coder(c)
+    cli()
