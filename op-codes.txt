@@ -3,53 +3,61 @@ Simple CPU Simulator -- included CPU OP-CODES:
 INT:
   byte-code: 1
   Next byte should be the interrupt to call.
-  See the sample-interrupts.txt for list of possible interrupts.
-AX:
+  See the interrupts.txt for list of possible interrupts.
+MOV:
   byte-code: 2
-  AX register is set to the next read byte in memory.
-BX:
-  byte-code: 3
-  BX register is set to the next read byte in memory.
-CX:
-  byte-code: 4
-  CX register is set to the next read byte in memory.
-DX:
-  byte-code: 5
-  DX register is set to the next read byte in memory.
+  Sets the register specified to an integer.
+  eg: mov ax,5
 JMP:
   byte-code: 6
   Set CPU Memory pointer to the next read byte in memory.
 PUSH:
   byte-code: 7
-  Store the current CPU Memory pointer for a later use.
+  Pushes a register into the stack.
+  eg: push ptr
+  eg: push ax
 POP:
   byte-code: 8
-  Restore the previously stored CPU Memory pointer.
+  Restore the previously pushed register.
+  eg: pop ptr
+  eg: pop cx
 CALL:
   byte-code: 9
   PUSHes the next to execute CPU Memory pointer, then performs a JMP using the next read byte.
-CX++:
+INC:
   byte-code: 10
-  Increments CX by 1.
-CX--:
+  Increments a register by 1.
+  eg: inc cx
+DEC:
   byte-code: 11
-  Decreases CX by 1.
-ADDCX:
+  Decreases a register by 1.
+  eg: dec bx
+ADD:
   byte-code: 12
-  Increments CX by the next read byte.
-SUBCX:
+  Increments a register by any amount.
+  eg: add cx,5
+SUB:
   byte-code: 13
-  Decreases CX by the next read byte.
+  Decreases a register by any amount.
+  eg: sub bx,2
+MUL:
+  byte-code: 18
+  Multiplies a register with any amount.
+  eg: mul dx,2
+DIV:
+  byte-code: 19
+  Divides a register with any amount.
+  eg: div ax,4
 USE:
   byte-code: 14
-  Sets CX to the byte stored at CPU Memory pointer stored in CX...
-  I know it sounds confusing, and it sort of is.  It's used with the IFs mainly.
+  Sets a register to the address currently in the register.
+  eg: use cx
 IF=:
   byte-code: 15
   If CX equals the value in the next read byte, then set the CPU Memory pointer to DX.
 IF!:
   byte-code: 16
   If CX does not equals the value in the next read byte, then set the CPU Memory pointer to DX.
-SIX:
+SWP:
   byte-code: 17
-  Enable 16-bit memory locations(still under development use at own risk!)
+  Swaps bytes in AX and BX.

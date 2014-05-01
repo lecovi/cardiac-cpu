@@ -41,8 +41,9 @@ Coder Klass:
   Example to load a binary file and immediately jump into the debugger with it:
     import readline
     c = CPU('myapp')
-    cli = Coder(c)
-    cli()
+    cli = Coder()
+    cli.configure(c)
+    cli.cmdloop()
   A CPU instance needs to be passed into the Coder, or it will not work.  You can also pass an empty CPU instance as well, to start a fresh new application.
 
 Storage Klass(sub-class of Memory):
@@ -67,5 +68,8 @@ Unit Klass:
   Here, the memory values are stored and validated to prevent Python exceptions.
   It provides the facility to add and subtract Units or ints, and conditional matching.
   It controls the attribute setting to prevent values outside the 255 range, which this CPU simulator does not yet support.
+
+Unit16 Klass:
+  This class is a subclass of Unit klass above, but is able to store 16-bit integers in 2-bytes.
 
 Please read the other included text files for more information on how to use this CPU simulator toolkit.
