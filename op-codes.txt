@@ -6,8 +6,11 @@ INT:
   See the interrupts.txt for list of possible interrupts.
 MOV:
   byte-code: 2
-  Sets the register specified to an integer.
+  Data moving operations, similar to the x86 instruction.
   eg: mov ax,5
+      mov &50,65
+      mov bx,&50
+      mov &53,ax
 JMP:
   byte-code: 6
   Set CPU Memory pointer to the next read byte in memory.
