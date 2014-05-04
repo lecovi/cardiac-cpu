@@ -1,14 +1,16 @@
-from cStringIO import StringIO
-import sys
-import zlib
 from cmd import Cmd
-import shlex
-import os
+import sys, os, zlib, shlex, mmap
 try:
     import termios
 except ImportError:
     print "termios not loaded, simulation will be limited."
     termios = None
+
+class CPUException(Exception):
+    pass
+
+class InvalidInterrupt(CPUException):
+    pass
 
 class Unit(object):
     max_int = 255
@@ -24,7 +26,7 @@ class Unit(object):
                 value = self.from_str(value)
             if isinstance(value, int):
                 if value > self.max_int or value < 0:
-                    raise ValueError
+                    raise CPUException('Integer assignment too large: %s > %s' % (value, self.max_int))
                 object.__setattr__(self, '_value', value)
             else:
                 raise TypeError
@@ -76,16 +78,20 @@ class Unit16(Unit):
 
 class Memory(object):
     def __init__(self, size):
-        self.mem = StringIO()
+        self.mem = mmap.mmap(-1, size)
         self.size = size
-        self.sixteen = False
-        self.clear()
+        self._ptr_stack = []
+        self._offset_stack = []
+        self._ptr = 0
+        self._offset = 0
     def clear(self):
         self.mem.seek(0)
         self.mem.write('\x00' * self.size)
         self.mem.seek(0)
-        self._ptr = 0
         self._ptr_stack = []
+        self._offset_stack = []
+        self._ptr = 0
+        self._offset = 0
     def __len__(self):
         return self.size
     def __check_key(self, key):
@@ -107,29 +113,40 @@ class Memory(object):
         self.mem.seek(self._ptr)
     @property
     def ptr(self):
-        return self.mem.tell()
+        return self.mem.tell()-self.offset
     @ptr.setter
     def ptr(self, value):
         if not isinstance(value, int):
             raise TypeError
         if value < 0 or value > self.size-1:
-            raise ValueError
-        self.mem.seek(value)
+            raise CPUException('Memory out of range.')
+        self.mem.seek(value+self.offset)
     def push(self):
         self._ptr_stack.append(self.ptr)
     def pop(self):
         self.ptr = self._ptr_stack.pop()
-    def read(self, num=1, force8=False):
+    @property
+    def offset(self):
+        return self._offset
+    @offset.setter
+    def offset(self, value):
+        if value > 0:
+            self._offset_stack.append(self._offset)
+            self._offset = value
+        else:
+            try:
+                self._offset = self._offset_stack.pop()
+            except:
+                self._offset = 0
+    def read(self, num=1):
         if self.eom:
-            print "Memory error: %d" % self.ptr
+            raise CPUException("Memory error: %d" % self.ptr)
         if num == 1:
-            if self.sixteen and not force8:
-                return Unit16(self.mem.read(2))
             return Unit(self.mem.read(1))
         return self.mem.read(num)
     def read16(self):
         if self.eom:
-            print "Memory error: %d" % self.ptr
+            raise CPUException("Memory error: %d" % self.ptr)
         if self.size > 256:
             return Unit16(self.mem.read(2))
         return Unit(self.mem.read(1))
@@ -154,7 +171,7 @@ class Memory(object):
         s = ''
         while True:
             if self.ptr > self.size-1: break
-            c = self.mem.read(1)
+            c = self.mem.read_byte()
             if c == term: break
             s += c
         return s
@@ -162,12 +179,7 @@ class Memory(object):
     def eom(self):
         return self.ptr > self.size-1
     def memcopy(self, src, dest, size):
-        self._ptr = self.ptr
-        self.mem.seek(src)
-        buf = self.mem.read(size)
-        self.mem.seek(dest)
-        self.mem.write(buf)
-        self.mem.seek(self._ptr)
+        self.mem.move(dest, src, size)
     def memclear(self, src, size):
         self._ptr = self.ptr
         self.mem.seek(src)
@@ -176,12 +188,14 @@ class Memory(object):
 
 class Storage(Memory):
     def __init__(self, filename, size):
-        self.size = size
         try:
-            self.mem = open(filename, 'r+b')
+            self.file = open(filename, 'r+b')
         except IOError:
-            self.mem = open(filename, 'w+b')
-            self.clear()
+            self.file = open(filename, 'w+b')
+        self.mem = mmap.mmap(self.file.fileno(), 0)
+        self.mem.resize(size)
+        self._ptr_stack = []
+        self._ptr = 0
 
 class Coder(Cmd):
     bc16_map = {
@@ -189,6 +203,7 @@ class Coder(Cmd):
         'call': 9,
         'if=': 15,
         'if!': 16,
+        'sys': 20,
     }
     bc_map = {
         'int': [1,0],
@@ -292,10 +307,13 @@ class Coder(Cmd):
             self.unknown_command(line)
     def do_boot(self, args):
         """ Executes the code currently in memory at an optional memory pointer location. """
+        if self.cpu.mem.offset > 0:
+            self.cpu.mem.offset = 0
         if args != '':
-            self.cpu.run(int(args))
+            rt = self.cpu.run(int(args))
         else:
-            self.cpu.run(self.cpu.mem.ptr)
+            rt = self.cpu.run(self.cpu.mem.ptr)
+        self.stdout.write('Exit Code: %s\n' % rt)
     def do_string(self, args):
         """ A macro to write a string to the screen 1 character at a time. """
         s = shlex.split(args)
@@ -311,6 +329,12 @@ class Coder(Cmd):
             self.cpu.mem.ptr = int(args)
         else:
             print self.cpu.mem.ptr
+    def do_offset(self, args):
+        """ Sets the address translation offset. """
+        if args != '':
+            self.cpu.mem.offset = int(args)
+        else:
+            print self.cpu.mem.offset
     def do_dump(self, args):
         """ Dumps the byte at the current memory location. """
         if args != '':
@@ -333,12 +357,12 @@ class Coder(Cmd):
         """ Saves the current binary image in memory to disc. """
         s = shlex.split(args)
         if len(s) > 0:
-            self.cpu.savebin(s[0])
+            self.cpu.savebin(s[0], self.cpu.mem.ptr, int(s[1]))
     def do_loadbin(self, args):
         """ Loads a binary image from disc into memory. """
         s = shlex.split(args)
         if len(s) > 0:
-            if self.cpu.loadbin(s[0]) == False:
+            if self.cpu.loadbin(s[0], self.cpu.mem.ptr) == False:
                 self.stdout.write('The binary is too large to fit in memory.\n')
     def do_clear(self, args):
         """ Clears the current data in memory. """
@@ -507,9 +531,6 @@ class BinLoaderHook(BaseCPUHook):
     def hook_11(self):
         open(self.get_filename(), 'rb').write(self.cpu.storage.read(self.cpu.cx.b))
 
-class InvalidInterrupt(Exception):
-    pass
-
 class CPUInterrupts(object):
     """
     This class is a Mixin to include the main CPU interrupts
@@ -608,12 +629,9 @@ class CPUCore(object):
     def hook_cleanup(self):
         for hook in self.cpu_hooks:
             self.cpu_hooks[hook].cleanup()
-    def dump(self):
-        self.mem.ptr = 0
-        for i in range(0, (len(self.mem)/2)-1):
-            print "%d, %d" % (self.mem.read().b, self.mem.read().b)
     def run(self, ptr=0):
-        self.mem.ptr = ptr
+        self.mem.offset = ptr
+        self.mem.ptr = 0
         exitcode = 0
         stack = []
         if termios:
@@ -625,13 +643,16 @@ class CPUCore(object):
             if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
             if self.mem.eom: break
             op = self.mem.read().b
-            if 'stepping' in self.__dict__:
+            if 'stepping' in self.__dict__ and op > 0:
                 print "PTR: %s, OP: %s, AX: %s, BX: %s, CX: %s, DX: %s" % (self.mem.ptr, op, self.ax.b, self.bx.b, self.cx.b, self.dx.b)
             if op == 1:
                 rt = self.do_int(self.mem.read().b)
                 if rt == 1:
-                    exitcode = 1
-                    break
+                    self.mem.offset = 0
+                    if self.mem.offset == 0:
+                        exitcode = self.ax.b
+                        break
+                    self.mem.ptr = stack.pop()
             elif op == 2:
                 v = self.mem.read().b
                 reg = self.mem.read16()
@@ -655,8 +676,8 @@ class CPUCore(object):
                 else:
                     self.mem.ptr = stack.pop()
             elif op == 9:
-                stack.append(self.mem.ptr + 1)
                 jmp = self.mem.read16()
+                stack.append(self.mem.ptr)
                 self.mem.ptr = jmp.b
             elif op == 10:
                 v = self.mem.read().b
@@ -712,16 +733,16 @@ class CPUCore(object):
             elif op == 17:
                 v1, v2 = self.mem.read().b, self.mem.read().b
                 if v1 > 0:
-                    reg1 = getattr(self, self.var_map[v1]).b
+                    reg1 = getattr(self, self.var_map[v1])
                 else:
-                    reg1 = self.mem.ptr
+                    reg1 = Unit16(self.mem.ptr)
                 if v2 > 0:
-                    reg2 = getattr(self, self.var_map[v2]).b
+                    reg2 = getattr(self, self.var_map[v2])
                 else:
-                    reg2 = self.mem.ptr
+                    reg2 = Unit16(self.mem.ptr)
                 old = reg1
-                reg1.value = reg2
-                reg2.value = old
+                reg1.value = reg2.b
+                reg2.value = old.b
             elif op == 18:
                 v = self.mem.read().b
                 vn = self.var_map[v]
@@ -740,15 +761,22 @@ class CPUCore(object):
                     getattr(self, vn).value = reg
                 else:
                     self.mem.ptr = reg
+            elif op == 20:
+                jmp = self.mem.read16()
+                stack.append(self.mem.ptr)
+                self.mem.offset = jmp.b
+                self.mem.ptr = 0
             elif self.cpu_hooks.has_key(op):
                 self.cpu_hooks[op](self.mem.read().b)
         if termios:
             attr[3] = oldattr
             termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
         self.hook_cleanup()
+        self.mem.offset = 0
+        return exitcode
 
 class CPU(CPUCore, CPUInterrupts):
-    cpu_memory = 64
+    cpu_memory = 4096
     storage = 4096
     shared_memory = 1024
     def __init__(self, filename=None, compressed=False):
@@ -758,20 +786,23 @@ class CPU(CPUCore, CPUInterrupts):
         self.cpu_hooks = {}
         if filename != None:
             self.loadbin(filename, compressed=compressed)
-    def loadbin(self, filename, compressed=False):
-        self.mem.clear()
+    def loadbin(self, filename, dest, compressed=False):
         if not compressed:
             bindata = open(filename, 'rb').read()
         else:
             bindata = zlib.decompress(open(filename, 'rb').read())
-        self.mem = Memory(len(bindata))
+        self.mem.push()
+        self.mem.ptr = dest
         self.mem.write(bindata)
-        self.mem.ptr = 0
-    def savebin(self, filename, compress=False):
+        self.mem.pop()
+    def savebin(self, filename, src, size, compress=False):
+        self.mem.push()
+        self.mem.ptr = src
         if not compress:
-            open(filename, 'wb').write(self.mem.mem.getvalue())
+            open(filename, 'wb').write(self.mem.mem.read(size))
         else:
-            open(filename, 'wb').write(zlib.compress(self.mem.mem.getvalue()))
+            open(filename, 'wb').write(zlib.compress(self.mem.mem.read(size)))
+        self.mem.pop()
 
 if __name__ == '__main__':
     import readline
