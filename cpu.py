@@ -1,5 +1,5 @@
 from cmd import Cmd
-import sys, os, zlib, shlex, mmap
+import sys, os, zlib, shlex, mmap, struct
 try:
     import termios
 except ImportError:
@@ -13,35 +13,34 @@ class InvalidInterrupt(CPUException):
     pass
 
 class Unit(object):
-    max_int = 255
     def __init__(self, default=0):
+        self.struct = struct.Struct(self.fmt)
         self.value = default
-    def from_str(self, value):
-        return ord(value)
-    def to_str(self, value):
-        return chr(value)
-    def __setattr__(self, name, value):
-        if name == 'value':
-            if isinstance(value, str):
-                value = self.from_str(value)
-            if isinstance(value, int):
-                if value > self.max_int or value < 0:
-                    raise CPUException('Integer assignment too large: %s > %s' % (value, self.max_int))
-                object.__setattr__(self, '_value', value)
-            else:
-                raise TypeError
+    @property
+    def value(self):
+        return self._value
+    @value.setter
+    def value(self, value):
+        if isinstance(value, int):
+            self._value = value
+        elif isinstance(value, str):
+            self._value = self.struct.unpack(value)[0]
+        elif isinstance(value, Unit):
+            self._value = value.value
+        else:
+            raise TypeError
     def __add__(self, other):
         if isinstance(other, int):
-            return Unit(self._value + other)
+            return self.__class__(self._value + other)
         elif isinstance(other, Unit):
-            return Unit(self._value + other.b)
+            return self.__class__(self._value + other.b)
         else:
             raise NotImplemented
     def __sub__(self, other):
         if isinstance(other, int):
-            return Unit(self._value - other)
+            return self.__class__(self._value - other)
         elif isinstance(other, Unit):
-            return Unit(self._value - other.b)
+            return self.__class__(self._value - other.b)
         else:
             raise NotImplemented
     def __eq__(self, other):
@@ -59,22 +58,26 @@ class Unit(object):
         else:
             return False
     def __len__(self):
-        return len(self.c)
+        return self.struct.size
+    def __str__(self):
+        return self.struct.pack(self.value)
+    def __int__(self):
+        return self.value
     @property
     def b(self):
-        """Get the byte value."""
-        return self._value
+        return self.value
     @property
     def c(self):
-        """Get the ascii value."""
-        return self.to_str(self._value)
+        return self.struct.pack(self.value)
 
-class Unit16(Unit):
-    max_int = 65536
-    def from_str(self, value):
-        return ord(value[1])*256+ord(value[0])
-    def to_str(self, value):
-        return chr(value-int(value/256)*256)+chr(int(value/256))
+class UInt8(Unit):
+    fmt = 'B'
+
+class UInt16(Unit):
+    fmt = 'H'
+
+class UInt32(Unit):
+    fmt = 'L'
 
 class Memory(object):
     def __init__(self, size):
@@ -103,13 +106,13 @@ class Memory(object):
     def __getitem__(self, key):
         self.__check_key(key)
         self.mem.seek(key)
-        value = self.mem.read(1)
+        value = UInt8(self.mem.read(1))
         self.mem.seek(self._ptr)
-        return Unit(value)
+        return UInt8(value)
     def __setitem__(self, key, value):
         self.__check_key(key)
         self.mem.seek(key)
-        self.write(value)
+        self.write(UInt8(value).c)
         self.mem.seek(self._ptr)
     @property
     def ptr(self):
@@ -142,29 +145,31 @@ class Memory(object):
         if self.eom:
             raise CPUException("Memory error: %d" % self.ptr)
         if num == 1:
-            return Unit(self.mem.read(1))
+            return UInt8(self.mem.read(1))
         return self.mem.read(num)
     def read16(self):
         if self.eom:
             raise CPUException("Memory error: %d" % self.ptr)
         if self.size > 256:
-            return Unit16(self.mem.read(2))
-        return Unit(self.mem.read(1))
+            return UInt16(self.mem.read(2))
+        return UInt8(self.mem.read(1))
     def write(self, value):
         if isinstance(value, Unit):
             self.mem.write(value.c)
         elif isinstance(value, int):
             if value < 256:
                 self.mem.write(chr(value))
+            elif value > 65535:
+                self.mem.write(UInt32(value).c)
             else:
-                self.mem.write(Unit16(value).c)
+                self.mem.write(UInt16(value).c)
         elif isinstance(value, str):
             self.mem.write(value)
         else:
             raise ValueError
     def write16(self, value):
         if self.size > 256:
-            self.mem.write(Unit16(value).c)
+            self.mem.write(UInt16(value).c)
         else:
             self.mem.write(chr(value))
     def readstring(self, term='\x00'):
@@ -280,29 +285,37 @@ class Coder(Cmd):
             else:
                 self.cpu.mem.write(self.get_int(arg))
         elif op in self.bc2_map:
-            self.cpu.mem.write(self.bc2_map[op])
             try:
                 a1,a2 = arg.split(',')
             except:
-                self.cpu.mem.ptr -= 1
                 self.unknown_command(line)
                 return
+            self.cpu.mem.write(self.bc2_map[op])
+            xop = 0
+            if a1.startswith('&'):
+                xop+=4
+                a1 = a1[1:]
+            if a2.startswith('&'):
+                xop+=8
+                a2 = a2[1:]
             if a1 in self.var_map:
-                a2 = self.get_int(a2)
-                try:
-                    self.cpu.mem.write(self.var_map[a1])
-                    if op == 'swp':
-                        self.cpu.mem.write(int(a2))
-                    else:
-                        self.cpu.mem.write16(int(a2))
-                except:
-                    self.cpu.mem.ptr -= 1
-                    self.unknown_command(line)
-                    return
-            else:
-                self.cpu.mem.ptr -= 1
-                self.stdout.write(' ** Invalid register: %s\n' % a1)
+                xop+=1
+                a1 = self.var_map[a1]
+            if a2 in self.var_map:
+                xop+=2
+                a2 = self.var_map[a2]
+            if xop in [0,2,8,12]:
+                self.unknown_command(line)
                 return
+            self.cpu.mem.write(xop)
+            if isinstance(a1, str):
+                self.cpu.mem.write16(int(a1))
+            else:
+                self.cpu.mem.write(int(a1))
+            if isinstance(a2, str):
+                self.cpu.mem.write16(int(a2))
+            else:
+                self.cpu.mem.write(int(a2))
         else:
             self.unknown_command(line)
     def do_boot(self, args):
@@ -341,9 +354,10 @@ class Coder(Cmd):
             ptr = int(args)
         else:
             ptr = self.cpu.mem.ptr
-        self.stdout.write("%s" % self.cpu.mem[ptr].b)
-        if self.cpu.mem[ptr].b > 64:
-            self.stdout.write(" / %s" % self.cpu.mem[ptr].c)
+        byte = self.cpu.mem[ptr]
+        self.stdout.write("%s" % byte.b)
+        if byte.b > 64:
+            self.stdout.write(' / %s' % byte.c)
         self.stdout.write('\n')
     def do_dump16(self, args):
         """ Dumps a 16-bit integer from the current memory location. """
@@ -612,10 +626,10 @@ class CPUInterrupts(object):
         cli()
 
 class CPUCore(object):
-    ax = Unit16()
-    bx = Unit16()
-    cx = Unit16()
-    dx = Unit16()
+    ax = UInt16()
+    bx = UInt16()
+    cx = UInt16()
+    dx = UInt16()
     var_map = {
         0: 'ptr',
         1: 'ax',
@@ -654,12 +668,19 @@ class CPUCore(object):
                         break
                     self.mem.ptr = stack.pop()
             elif op == 2:
-                v = self.mem.read().b
-                reg = self.mem.read16()
-                if v > 0:
-                    getattr(self, self.var_map[v]).value = reg.b
+                xop = self.mem.read().b
+                xop_map = {1:'<BH', 3:'<BB', 4:'<HH', 6:'<HB', 9:'<BH'}
+                v1, v2 = struct.unpack(xop_map[xop], self.mem.read(struct.calcsize(xop_map[xop])))
+                if xop in [3,6]:
+                    v2 = getattr(self, self.var_map[v2]).b
+                if xop in [1,3,9]:
+                    v1 = getattr(self, self.var_map[v1])
+                if xop == 9:
+                    v1.value = self.mem[v2]
+                elif xop in [4,6]:
+                    self.mem[v1] = v2
                 else:
-                    self.mem.ptr = reg.b
+                    v1.value = v2
             elif op == 6:
                 jmp = self.mem.read16()
                 self.mem.ptr = jmp.b
@@ -719,27 +740,27 @@ class CPUCore(object):
                 v = self.mem.read().b
                 vn = self.var_map[v]
                 reg = getattr(self, vn)
-                reg.value = self.mem[reg.b].b
+                reg.value = self.mem[reg].b
                 if v > 0:
                     getattr(self, vn).value = reg.b
                 else:
                     self.mem.ptr = reg.b
             elif op == 15:
-                if self.cx == self.mem.read16():
+                if self.cx.b == self.mem.read16().b:
                     self.mem.ptr = self.dx.b
             elif op == 16:
-                if self.cx != self.mem.read16():
+                if self.cx.b != self.mem.read16().b:
                     self.mem.ptr = self.dx.b
             elif op == 17:
                 v1, v2 = self.mem.read().b, self.mem.read().b
                 if v1 > 0:
                     reg1 = getattr(self, self.var_map[v1])
                 else:
-                    reg1 = Unit16(self.mem.ptr)
+                    reg1 = UInt16(self.mem.ptr)
                 if v2 > 0:
                     reg2 = getattr(self, self.var_map[v2])
                 else:
-                    reg2 = Unit16(self.mem.ptr)
+                    reg2 = UInt16(self.mem.ptr)
                 old = reg1
                 reg1.value = reg2.b
                 reg2.value = old.b
