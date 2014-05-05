@@ -2,7 +2,7 @@ Simple CPU Simulator -- included CPU OP-CODES:
 
 INT:
   byte-code: 1
-  Next byte should be the interrupt to call.
+  Next byte should be the software interrupt to call.
   See the interrupts.txt for list of possible interrupts.
 MOV:
   byte-code: 2
@@ -67,3 +67,6 @@ IN:
 OUT:
   byte-code: 4
   Sends a word to an IO port.
+HLT:
+  byte-code: 1
+  Halts the CPU/Terminate current execution and return to OS.

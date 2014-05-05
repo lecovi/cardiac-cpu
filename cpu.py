@@ -213,6 +213,7 @@ class Coder(Cmd):
     }
     bc_map = {
         'int': [1,0],
+        'ret': [1,0],
         'hlt': [5,0],
         'push': [7,0],
         'pop': [8,0],
@@ -555,6 +556,7 @@ class ConIOHook(BaseCPUHook):
 class CPURegisters(object):
     """ This class contains all the CPU registers and manages them. """
     registers = ['ip','ax','bx','cx','dx','sp','bp','si','di','cs','ds','es','ss']
+    pushable = ['ip','ax','bx','cx','dx','si','di','cs','ds','es']
     def __init__(self):
         for reg in self.registers:
             setattr(self, reg, UInt16())
@@ -580,6 +582,19 @@ class CPUCore(object):
     def clear_registers(self):
         for reg in self.var_map:
             getattr(self.regs, reg).value = 0
+    def push_registers(self, regs=None):
+        if regs is None:
+            regs = self.regs.pushable
+        for reg in regs:
+            self.mem[self.ss.b+self.sp.b] = getattr(self.regs, reg)
+            self.sp.value += 2
+    def pop_registers(self, regs=None):
+        if regs is None:
+            regs = self.regs.pushable.reverse()
+        for reg in regs:
+            self.sp.value -= 2
+            src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
+            getattr(self.regs, reg).value = src
     def get_xop(self, trans=True):
         """ This handy function to translate the xop code and return a proper integer from the source. """
         xop = self.mem.read().b
@@ -597,7 +612,7 @@ class CPUCore(object):
         self.regs.cs.value = cs
         self.mem.ptr = 0
         exitcode = 0
-        stack = []
+        int_table = 4000
         if termios:
             attr = termios.tcgetattr(sys.stdin)
             oldattr = attr[3]
@@ -609,8 +624,21 @@ class CPUCore(object):
             if self.mem.eom: break
             op = self.mem.read().b
             if 'stepping' in self.__dict__ and op > 0:
-                print "PTR: %s, OP: %s, AX: %s, BX: %s, CX: %s, DX: %s" % (self.mem.ptr, op, self.ax.b, self.bx.b, self.cx.b, self.dx.b)
-            if op == 2:
+                for reg in self.regs.registers:
+                    sys.stdout.write('%s=%s\t' % (reg.upper(), getattr(self.regs, reg).b))
+                sys.stdout.write('\n')
+            if op == 1:
+                i = self.mem.read().b
+                if i > 0:
+                    self.ip.value = self.mem.ptr-self.cs.b
+                    self.push_registers(['cs','ip'])
+                    jmp = self.mem[i*2+int_table:i*2+int_table+2].b
+                    self.regs.cs.value = jmp
+                    self.ip.value = 0
+                else:
+                    self.pop_registers(['ip','cs'])
+                continue
+            elif op == 2:
                 xop,dst,src = self.get_xop()
                 if xop in [1,3,9,11]:
                     # Register is destination
@@ -641,27 +669,27 @@ class CPUCore(object):
                 break
             elif op == 6:
                 jmp = self.mem.read16()
-                self.mem.ptr = jmp.b
+                self.mem.ptr = jmp.b+self.cs.b
             elif op == 7:
                 v = self.mem.read().b
                 if v > 0:
-                    src = getattr(self, self.var_map[v]).b
+                    src = getattr(self, self.var_map[v])
+                    self.mem[self.ss.b+self.sp.b] = src
+                    self.sp.value += 2
                 else:
-                    src = self.mem.ptr
-                self.mem[self.ss.b+self.sp.b] = src
-                self.sp.value += 2
+                    self.push_registers()
             elif op == 8:
                 v = self.mem.read().b
-                self.sp.value -= 2
-                src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
                 if v > 0:
+                    src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
+                    self.sp.value -= 2
                     getattr(self, self.var_map[v]).value = src
                 else:
-                    self.mem.ptr = src
+                    self.pop_registers()
             elif op == 9:
                 jmp = self.mem.read16()
                 self.mem[self.ss.b+self.sp.b] = self.mem.ptr
-                self.mem.ptr = jmp.b
+                self.mem.ptr = jmp.b+self.cs.b
             elif op == 10:
                 v = self.mem.read().b
                 vn = self.var_map[v]
@@ -670,7 +698,7 @@ class CPUCore(object):
                 if v > 0:
                     getattr(self, vn).value = reg
                 else:
-                    self.mem.ptr = reg
+                    raise CPUException('Program attempted to change IP.')
             elif op == 11:
                 v = self.mem.read().b
                 vn = self.var_map[v]
@@ -679,7 +707,7 @@ class CPUCore(object):
                 if v > 0:
                     getattr(self, vn).value = reg
                 else:
-                    self.mem.ptr = reg
+                    raise CPUException('Program attempted to change IP.')
             elif op == 12:
                 xop,dst,src = self.get_xop()
                 if xop not in [1,3,6,9,11]:
@@ -702,13 +730,13 @@ class CPUCore(object):
                 if v > 0:
                     getattr(self, vn).value = reg.b
                 else:
-                    self.mem.ptr = reg.b
+                    raise CPUException('Program attempted to change IP.')
             elif op == 15:
                 if self.cx.b == self.mem.read16().b:
-                    self.mem.ptr = self.dx.b
+                    self.mem.ptr = self.dx.b+self.cs.b
             elif op == 16:
                 if self.cx.b != self.mem.read16().b:
-                    self.mem.ptr = self.dx.b
+                    self.mem.ptr = self.dx.b+self.cs.b
             elif op == 18:
                 xop,dst,src = self.get_xop()
                 if xop not in [1,3,6,9,11]:
@@ -723,11 +751,6 @@ class CPUCore(object):
                 # Register is destination
                 dst = getattr(self, self.var_map[dst])
                 dst.value /= src
-            elif op == 20:
-                jmp = self.mem.read16()
-                stack.append(self.mem.ptr)
-                self.mem.offset = jmp.b
-                self.mem.ptr = 0
             self.ip.value = self.mem.ptr-self.cs.b
         if termios:
             attr[3] = oldattr
@@ -769,7 +792,8 @@ class CPU(CPUCore):
 if __name__ == '__main__':
     import readline
     c = CPU()
-    c.add_cpu_hook(HelloWorldHook)
+    c.loadbin('interrupt.tbl', 4000)
+    c.loadbin('int10.bin', 1000)
     c.add_cpu_hook(ConIOHook)
     cli = Coder()
     cli.configure(c)
