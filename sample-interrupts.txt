@@ -1,6 +1,12 @@
 Simple CPU Simulator -- Simple Int table:
 
+All these software interrupts requires that "interrupt.bin" is loaded into memory,
+and that the interrupt vector table is pointing to it's address in memory.
+
 INT 10:
   Reads a 0-terminated string of bytes from CPU memory and display it on the screen.
-  Requires that "int10.bin" is loaded into memory, and that the interrupt vector table is pointing to it's address in memory.
   AX: source
+INT 12:
+  Read raw input from the keyboard and store it in CPU Memory.
+  AX: CPU Memory location to store text to.
+  Returns CX: Length of string stored.

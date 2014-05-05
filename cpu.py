@@ -196,10 +196,22 @@ class Storage(Memory):
             self.file = open(filename, 'r+b')
         except IOError:
             self.file = open(filename, 'w+b')
+            self.file.write('\x00'*size)
+            self.file.close()
+            self.file = open(filename, 'r+b')
         self.mem = mmap.mmap(self.file.fileno(), 0)
+        self.size = size
         self.mem.resize(size)
         self._ptr_stack = []
         self._ptr = 0
+    def __del__(self):
+        print "Closing channels..."
+        self.mem.flush()
+        self.mem.close()
+        self.file.close()
+    def resize(self, newsize):
+        self.size = newsize
+        self.mem.resize(newsize)
 
 class Coder(Cmd):
     bc16_map = {
@@ -340,15 +352,6 @@ class Coder(Cmd):
             self.stdout.write('Exit Code: %s\n' % rt)
         except CPUException, e:
             print e
-    def do_string(self, args):
-        """ A macro to write a string to the screen 1 character at a time. """
-        s = shlex.split(args)
-        for c in s[0]:
-            self.cpu.mem.write(2)
-            self.cpu.mem.write(1)
-            self.cpu.mem.write(ord(c))
-            self.cpu.mem.write(1)
-            self.cpu.mem.write(3)
     def do_ptr(self, args):
         """ Sets or returns the current pointer location in memory. """
         if args != '':
@@ -549,7 +552,7 @@ class ConIOHook(BaseCPUHook):
     def in_4000(self):
         if termios:
             sys.stdin.flush()
-            return sys.stdin.read(1)
+            return ord(sys.stdin.read(1))
         else:
             raise CPUException("CPU: Single key input not supported on this platform.")
 
@@ -793,7 +796,7 @@ if __name__ == '__main__':
     import readline
     c = CPU()
     c.loadbin('interrupt.tbl', 4000)
-    c.loadbin('int10.bin', 1000)
+    c.loadbin('interrupt.bin', 1000)
     c.add_cpu_hook(ConIOHook)
     cli = Coder()
     cli.configure(c)
