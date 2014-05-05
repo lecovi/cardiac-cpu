@@ -84,63 +84,62 @@ class Memory(object):
         self.mem = mmap.mmap(-1, size)
         self.size = size
         self._ptr_stack = []
-        self._offset_stack = []
         self._ptr = 0
-        self._offset = 0
     def clear(self):
         self.mem.seek(0)
         self.mem.write('\x00' * self.size)
         self.mem.seek(0)
         self._ptr_stack = []
-        self._offset_stack = []
         self._ptr = 0
-        self._offset = 0
     def __len__(self):
         return self.size
     def __check_key(self, key):
         if not isinstance(key, int):
-            raise TypeError
+            raise TypeError('Type %s is not valid here.' % type(key))
         if key < 0 or key > self.size-1:
             raise IndexError
         self._ptr = self.ptr
     def __getitem__(self, key):
+        if isinstance(key, slice):
+            stop = key.stop
+            key = key.start
+        else:
+            stop = key
         self.__check_key(key)
         self.mem.seek(key)
-        value = UInt8(self.mem.read(1))
+        if stop > key:
+            if stop-key == 2:
+                value = UInt16(self.mem.read(2))
+            else:
+                value = self.mem.read(stop-key)
+        else:
+            value = UInt8(self.mem.read(1))
         self.mem.seek(self._ptr)
-        return UInt8(value)
+        return value
     def __setitem__(self, key, value):
         self.__check_key(key)
         self.mem.seek(key)
-        self.write(UInt8(value).c)
+        if isinstance(value, Unit):
+            self.write(value.c)
+        elif isinstance(value, str):
+            self.write(value)
+        else:
+            self.write(UInt8(value).c)
         self.mem.seek(self._ptr)
     @property
     def ptr(self):
-        return self.mem.tell()-self.offset
+        return self.mem.tell()
     @ptr.setter
     def ptr(self, value):
         if not isinstance(value, int):
             raise TypeError
         if value < 0 or value > self.size-1:
             raise CPUException('Memory out of range.')
-        self.mem.seek(value+self.offset)
+        self.mem.seek(value)
     def push(self):
         self._ptr_stack.append(self.ptr)
     def pop(self):
         self.ptr = self._ptr_stack.pop()
-    @property
-    def offset(self):
-        return self._offset
-    @offset.setter
-    def offset(self, value):
-        if value > 0:
-            self._offset_stack.append(self._offset)
-            self._offset = value
-        else:
-            try:
-                self._offset = self._offset_stack.pop()
-            except:
-                self._offset = 0
     def read(self, num=1):
         if self.eom:
             raise CPUException("Memory error: %d" % self.ptr)
@@ -204,6 +203,8 @@ class Storage(Memory):
 
 class Coder(Cmd):
     bc16_map = {
+        'in': 3,
+        'out': 4,
         'jmp': 6,
         'call': 9,
         'if=': 15,
@@ -212,6 +213,7 @@ class Coder(Cmd):
     }
     bc_map = {
         'int': [1,0],
+        'hlt': [5,0],
         'push': [7,0],
         'pop': [8,0],
         'inc': [10,3],
@@ -220,26 +222,26 @@ class Coder(Cmd):
     }
     bc2_map = {
         'mov': 2,
+        'in': 3,
+        'out': 4,
         'add': 12,
         'sub': 13,
-        'swp': 17,
         'mul': 18,
         'div': 19,
     }
-    var_map = {
-        'ptr': 0,
-        'ax': 1,
-        'bx': 2,
-        'cx': 3,
-        'dx': 4,
-    }
     prompt = '0 '
+    @property
+    def var_map(self):
+        _var_map = getattr(self, '_var_map', None)
+        if _var_map is None:
+            regs = self.cpu.var_map
+            _var_map = dict([(reg,regs.index(reg)) for reg in regs])
+            self._var_map = _var_map
+        return _var_map
     def configure(self, cpu):
         if not isinstance(cpu, CPU):
             raise TypeError
         self.cpu = cpu
-        for hook in self.cpu.cpu_hooks:
-            self.bc_map.update({self.cpu.cpu_hooks[hook].opname: [hook,0]})
     def unknown_command(self, line):
         self.stdout.write('*** Unknown syntax: %s\n'%line)
     def emptyline(self):
@@ -278,7 +280,12 @@ class Coder(Cmd):
             # This map is for operations which can take a 16-bit integer parameter.
             self.cpu.mem.write(self.bc16_map[op])
             if arg != '':
-                self.cpu.mem.write16(int(arg))
+                if ',' in arg:
+                    a1,a2 = arg.split(',')
+                    self.cpu.mem.write16(self.get_int(a1))
+                    self.cpu.mem.write16(self.get_int(a2))
+                else:
+                    self.cpu.mem.write16(int(arg))
         elif op in self.bc_map:
             # This map is for operations which can take an 8-bit integer parameter.
             self.cpu.mem.write(self.bc_map[op][0])
@@ -323,8 +330,6 @@ class Coder(Cmd):
             self.unknown_command(line)
     def do_boot(self, args):
         """ Executes the code currently in memory at an optional memory pointer location. """
-        if self.cpu.mem.offset > 0:
-            self.cpu.mem.offset = 0
         if args != '':
             ptr = int(args)
         else:
@@ -349,12 +354,6 @@ class Coder(Cmd):
             self.cpu.mem.ptr = int(args)
         else:
             print self.cpu.mem.ptr
-    def do_offset(self, args):
-        """ Sets the address translation offset. """
-        if args != '':
-            self.cpu.mem.offset = int(args)
-        else:
-            print self.cpu.mem.offset
     def do_dump(self, args):
         """ Dumps the byte at the current memory location. """
         if args != '':
@@ -433,7 +432,10 @@ class Coder(Cmd):
             self.stdout.write('Please specify a size in bytes.\n')
     def do_registers(self, args):
         """ Prints the current state of the CPU registers. """
-        self.stdout.write('AX=%s, BX=%s, CX=%s, DX=%s\n' % (self.cpu.ax.b, self.cpu.bx.b, self.cpu.cx.b, self.cpu.dx.b))
+        reglist = []
+        for reg in self.cpu.regs.registers:
+            reglist.append('%s=%s\t' % (reg.upper(), getattr(self.cpu, reg).b))
+        self.columnize(reglist)
     def do_memcopy(self, args):
         """ Performs a memory copy operation. """
         s = shlex.split(args)
@@ -513,142 +515,71 @@ class BaseCPUHook(object):
         if not isinstance(cpu, CPU):
             raise TypeError
         self.cpu = cpu
-    def __call__(self, i):
+    def get_handler(self, i, d):
         try:
-            func = getattr(self, "hook_%d" % i)
+            func = getattr(self, "%s_%d" % (d, i))
         except AttributeError:
-            raise InvalidInterrupt("HOOK %d is not defined." % i)
-        func()
+            raise InvalidInterrupt("Port %d is not defined." % i)
+        return func
+    def input(self, i):
+        func = self.get_handler(i, 'in')
+        return func()
+    def output(self, i, v):
+        func = self.get_handler(i, 'out')
+        func(v)
     def cleanup(self):
         pass
 
 class HelloWorldHook(BaseCPUHook):
-    opcode = 60
-    opname = 'hlo'
-    def hook_32(self):
-        print "Hello World!"
-    def hook_33(self):
-        print "Current Register values:"
-        print self.cpu.ax.b
-        print self.cpu.bx.b
-        print self.cpu.cx.b
-        print self.cpu.dx.b
+    ports = [32,33]
+    def out_32(self, addr):
+        self.addr = addr
+    def in_32(self):
+        self.cpu.mem[self.addr] = "Hello World!"
+        return self.addr
+    def out_33(self, reg):
+        sys.stdout.write("%s\n" % getattr(self.cpu, self.cpu.var_map[reg]).b)
 
-class BinLoaderHook(BaseCPUHook):
-    """
-    BinLoaderHook can be used during development to load binary data directly into an attached storage unit.
-    It can also export data from the storage unit directly into an external file.
-    """
-    opcode = 240
-    opname = 'ldr'
-    def get_filename(self):
-        ptr = self.cpu.mem.ptr
-        self.cpu.mem.ptr = self.cpu.ax.b
-        filename = self.cpu.mem.readstring()
-        self.cpu.mem.ptr = ptr
-        return filename
-    def hook_10(self):
-        self.cpu.storage.write(open(self.get_filename(), 'rb').read())
-    def hook_11(self):
-        open(self.get_filename(), 'rb').write(self.cpu.storage.read(self.cpu.cx.b))
-
-class CPUInterrupts(object):
-    """
-    This class is a Mixin to include the main CPU interrupts
-    """
-    def do_int(self, i):
-        if i == 1:
-            return 1
-        try:
-            func = getattr(self, "int_%d" % i)
-        except AttributeError:
-            raise InvalidInterrupt("INT %d is not defined." % i)
-        func()
-    def int_2(self):
-        sys.stdout.write('\033[2J\033[0;0H')
-    def int_3(self):
-        sys.stdout.write("%s" % self.ax.c)
-    def int_4(self):
-        sys.stdout.write('\033[1;%dm' % self.ax.b)
-    def int_5(self):
-        self.mem.memcopy(self.ax.b, self.bx.b, self.cx.b)
-    def int_6(self):
-        self.mem.memclear(self.ax.b, self.cx.b)
-    def int_7(self):
-        self.storage.ptr = self.ax.b
-    def int_8(self):
-        ptr = self.mem.ptr
-        self.mem.ptr = self.ax.b
-        self.mem.write(self.storage.read(self.cx.b))
-        self.mem.ptr = ptr
-    def int_9(self):
-        ptr = self.mem.ptr
-        self.mem.ptr = self.ax.b
-        self.storage.write(self.mem.read(self.cx.b))
-        self.mem.ptr = ptr
-    def int_10(self):
-        ptr = self.mem.ptr
-        self.mem.ptr = self.ax.b
-        sys.stdout.write(self.mem.readstring())
-        self.mem.ptr = ptr
-    def int_11(self):
+class ConIOHook(BaseCPUHook):
+    """ This implements a basic tty-based display and keyboard for basic input/output operations from the CPU. """
+    ports = [8000, 4000]
+    def out_8000(self, reg):
+        sys.stdout.write('%s' % chr(reg))
+    def in_4000(self):
         if termios:
             sys.stdin.flush()
-            self.mem[self.cx.b] = sys.stdin.read(1)
+            return sys.stdin.read(1)
         else:
             raise CPUException("CPU: Single key input not supported on this platform.")
-    def int_12(self):
-        ptr = self.mem.ptr
-        self.mem.ptr = self.ax.b
-        s = raw_input()
-        for c in s:
-            self.mem.write(ord(c))
-        self.mem.write(0)
-        self.cx.value = len(s)
-        self.mem.ptr = ptr
-    def int_40(self):
-        ptr = self.mem.ptr
-        self.mem.ptr = self.ax.b
-        self.imem.ptr = self.bx.b
-        self.imem.write(self.mem.read(self.cx.b))
-        self.mem.memclear(self.ax.b, self.cx.b)
-        self.mem.ptr = ptr
-    def int_41(self):
-        ptr = self.mem.ptr
-        self.imem.ptr = self.ax.b
-        self.mem.ptr = self.bx.b
-        self.mem.write(self.imem.read(self.cx.b))
-        self.imem.memclear(self.ax.b, self.cx.b)
-        self.mem.ptr = ptr
-    def int_42(self):
-        self.imem.ptr = self.ax.b
-        self.storage.write(self.imem.read(self.cx.b))
-    def int_43(self):
-        self.imem.ptr = self.ax.b
-        self.imem.write(self.storage.read(self.cx.b))
-    def int_255(self):
-        self.savebin('dump')
-        cli = Coder(self)
-        cli()
+
+class CPURegisters(object):
+    """ This class contains all the CPU registers and manages them. """
+    registers = ['ip','ax','bx','cx','dx','sp','bp','si','di','cs','ds','es','ss']
+    def __init__(self):
+        for reg in self.registers:
+            setattr(self, reg, UInt16())
 
 class CPUCore(object):
-    ax = UInt16()
-    bx = UInt16()
-    cx = UInt16()
-    dx = UInt16()
-    var_map = {
-        0: 'ptr',
-        1: 'ax',
-        2: 'bx',
-        3: 'cx',
-        4: 'dx',
-    }
+    @property
+    def var_map(self):
+        return self.regs.registers
+    @property
+    def cs(self):
+        return UInt16(self.regs.cs.value)
+    def __getattr__(self, name):
+        if name in self.regs.registers:
+            return getattr(self.regs, name)
+        raise AttributeError("%s isn't here." % name)
     def add_cpu_hook(self, klass):
         hook = klass(self)
-        self.cpu_hooks.update({hook.opcode: hook})
+        for port in hook.ports:
+            self.cpu_hooks.update({port: hook})
     def hook_cleanup(self):
         for hook in self.cpu_hooks:
             self.cpu_hooks[hook].cleanup()
+    def clear_registers(self):
+        for reg in self.var_map:
+            getattr(self.regs, reg).value = 0
     def get_xop(self, trans=True):
         """ This handy function to translate the xop code and return a proper integer from the source. """
         xop = self.mem.read().b
@@ -659,10 +590,11 @@ class CPUCore(object):
             src = getattr(self, self.var_map[src]).b
         if xop in [9,11]:
             # Memory address is the source.
-            src = self.mem[src].b
+            src = self.mem[self.ds.b+src].b
         return xop,dst,src
-    def run(self, ptr=0):
-        self.mem.offset = ptr
+    def run(self, cs=0):
+        self.clear_registers()
+        self.regs.cs.value = cs
         self.mem.ptr = 0
         exitcode = 0
         stack = []
@@ -672,20 +604,13 @@ class CPUCore(object):
             attr[3] = attr[3] & ~termios.ICANON
             termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
         while True:
+            self.mem.ptr = self.cs.b+self.ip.b
             if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
             if self.mem.eom: break
             op = self.mem.read().b
             if 'stepping' in self.__dict__ and op > 0:
                 print "PTR: %s, OP: %s, AX: %s, BX: %s, CX: %s, DX: %s" % (self.mem.ptr, op, self.ax.b, self.bx.b, self.cx.b, self.dx.b)
-            if op == 1:
-                rt = self.do_int(self.mem.read().b)
-                if rt == 1:
-                    self.mem.offset = 0
-                    if self.mem.offset == 0:
-                        exitcode = self.ax.b
-                        break
-                    self.mem.ptr = stack.pop()
-            elif op == 2:
+            if op == 2:
                 xop,dst,src = self.get_xop()
                 if xop in [1,3,9,11]:
                     # Register is destination
@@ -697,28 +622,45 @@ class CPUCore(object):
                     dst.value = src
                 elif xop in [4,5,6,7]:
                     # Moves data in memory address.
-                    self.mem[dst] = src
+                    self.mem[self.ds.b+dst] = src
                 else:
                     # Moves data into register.
                     dst.value = src
+            elif op == 3:
+                v = self.mem.read16().b
+                port = self.mem.read16().b
+                if self.cpu_hooks.has_key(port):
+                    getattr(self, self.var_map[v]).value = self.cpu_hooks[port].input(port)
+            elif op == 4:
+                port = self.mem.read16().b
+                v = self.mem.read16().b
+                if self.cpu_hooks.has_key(port):
+                    self.cpu_hooks[port].output(port, getattr(self, self.var_map[v]).b)
+            elif op == 5:
+                exitcode = self.mem.read().b
+                break
             elif op == 6:
                 jmp = self.mem.read16()
                 self.mem.ptr = jmp.b
             elif op == 7:
                 v = self.mem.read().b
                 if v > 0:
-                    stack.append(getattr(self, self.var_map[v]).b)
+                    src = getattr(self, self.var_map[v]).b
                 else:
-                    stack.append(self.mem.ptr)
+                    src = self.mem.ptr
+                self.mem[self.ss.b+self.sp.b] = src
+                self.sp.value += 2
             elif op == 8:
                 v = self.mem.read().b
+                self.sp.value -= 2
+                src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
                 if v > 0:
-                    getattr(self, self.var_map[v]).value = stack.pop()
+                    getattr(self, self.var_map[v]).value = src
                 else:
-                    self.mem.ptr = stack.pop()
+                    self.mem.ptr = src
             elif op == 9:
                 jmp = self.mem.read16()
-                stack.append(self.mem.ptr)
+                self.mem[self.ss.b+self.sp.b] = self.mem.ptr
                 self.mem.ptr = jmp.b
             elif op == 10:
                 v = self.mem.read().b
@@ -767,28 +709,6 @@ class CPUCore(object):
             elif op == 16:
                 if self.cx.b != self.mem.read16().b:
                     self.mem.ptr = self.dx.b
-            elif op == 17:
-                xop,dst,src = self.get_xop(False)
-                if xop not in [1,3,6,9]:
-                    raise CPUException('SWP operation expects the destination to be a register.')
-                if xop in [1,4]:
-                    raise CPUException('Cannot use SWP operation on literal integer.')
-                # Register is destination
-                dst = getattr(self, self.var_map[dst])
-                dv = dst.b
-                ds = src.b
-                src.value = dv
-                print xop
-                if xop == 9:
-                    # Moves memory address into register.
-                    dst.value = ds
-                    self.mem[ds] = dv
-                elif xop == 4:
-                    # Moves data in memory address.
-                    self.mem[dv] = ds
-                else:
-                    # Moves data into register.
-                    dst.value = ds
             elif op == 18:
                 xop,dst,src = self.get_xop()
                 if xop not in [1,3,6,9,11]:
@@ -808,8 +728,7 @@ class CPUCore(object):
                 stack.append(self.mem.ptr)
                 self.mem.offset = jmp.b
                 self.mem.ptr = 0
-            elif self.cpu_hooks.has_key(op):
-                self.cpu_hooks[op](self.mem.read().b)
+            self.ip.value = self.mem.ptr-self.cs.b
         if termios:
             attr[3] = oldattr
             termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
@@ -817,11 +736,12 @@ class CPUCore(object):
         self.mem.offset = 0
         return exitcode
 
-class CPU(CPUCore, CPUInterrupts):
+class CPU(CPUCore):
     cpu_memory = 4096
     storage = 4096
     shared_memory = 1024
     def __init__(self, filename=None, compressed=False):
+        self.regs = CPURegisters()
         self.mem = Memory(self.cpu_memory)
         self.storage = Storage('storage', self.shared_memory) if self.storage > 0 else None
         self.imem = Memory(self.shared_memory) if self.shared_memory > 0 else None
@@ -849,7 +769,8 @@ class CPU(CPUCore, CPUInterrupts):
 if __name__ == '__main__':
     import readline
     c = CPU()
-    c.add_cpu_hook(BinLoaderHook)
+    c.add_cpu_hook(HelloWorldHook)
+    c.add_cpu_hook(ConIOHook)
     cli = Coder()
     cli.configure(c)
     cli.cmdloop()

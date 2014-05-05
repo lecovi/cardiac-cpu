@@ -61,6 +61,9 @@ IF=:
 IF!:
   byte-code: 16
   If CX does not equals the value in the next read byte, then set the CPU Memory pointer to DX.
-SWP:
-  byte-code: 17
-  Swaps bytes in AX and BX.
+IN:
+  byte-code: 3
+  Takes input from an IO port.
+OUT:
+  byte-code: 4
+  Sends a word to an IO port.
