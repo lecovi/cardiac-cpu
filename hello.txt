@@ -3,14 +3,17 @@ Simple CPU Simulator -- Hello World example code:
 This is the source code for hello.bin, which you can view in a hex editor:
 
 ---------
-mov ss,64
-jmp 36
+mov ss,*stackseg
+jmp *main
+label hello
 data "Hello Simple CPU Simulator!"
-mov ax,8
+label main
+mov ax,*hello
 int 10
 mov ax,10
 out 8000,ax
 hlt
+label stackseg
 ptr 0
 savebin hello.bin 55
 boot

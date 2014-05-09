@@ -260,9 +260,18 @@ class Coder(Cmd):
     def postcmd(self, stop, line):
         self.prompt = '%s ' % self.cpu.mem.ptr
         return stop
-    def get_label(self, lbl):
+    def get_label(self, lbl, reference=True):
         if lbl[0] == '*':
-            return self.labels[lbl[1:]]
+            label = lbl[1:]
+            if reference == False:
+                return self.labels[lbl[1:]][0]
+            elif label in self.labels:
+                self.labels[label][1].append(self.cpu.mem.ptr)
+                ptr = self.labels[lbl[1:]][0]
+            else:
+                self.labels[label] = [0,[self.cpu.mem.ptr]]
+                ptr = 0
+            return ptr
         return lbl
     def get_int(self, arg):
         try:
@@ -320,10 +329,10 @@ class Coder(Cmd):
             xop = 0
             if a1.startswith('&'):
                 xop+=4
-                a1 = str(self.get_label(a1[1:]))
+                a1 = a1[1:]
             if a2.startswith('&'):
                 xop+=8
-                a2 = str(self.get_label(a2[1:]))
+                a2 = a2[1:]
             if a1 in self.var_map:
                 xop+=1
                 a1 = self.var_map[a1]
@@ -335,10 +344,12 @@ class Coder(Cmd):
                 return
             self.cpu.mem.write(xop)
             if isinstance(a1, str):
+                a1 = self.get_label(a1)
                 self.cpu.mem.write16(int(a1))
             else:
                 self.cpu.mem.write(int(a1))
             if isinstance(a2, str):
+                a2 = self.get_label(a2)
                 self.cpu.mem.write16(int(a2))
             else:
                 self.cpu.mem.write(int(a2))
@@ -358,14 +369,19 @@ class Coder(Cmd):
     def do_ptr(self, args):
         """ Sets or returns the current pointer location in memory. """
         if args != '':
-            args = self.get_label(args)
+            args = self.get_label(args, False)
             self.cpu.mem.ptr = int(args)
         else:
             print self.cpu.mem.ptr
     def do_label(self, args):
         """ Sets or prints a list of pointer variables. """
         if args != '':
-            self.labels[args] = self.cpu.mem.ptr
+            if args in self.labels:
+                self.labels[args][0] = self.cpu.mem.ptr
+                for ptr in self.labels[args][1]:
+                    self.cpu.mem[ptr] = UInt16(self.labels[args][0])
+            else:
+                self.labels[args] = [self.cpu.mem.ptr, []]
         else:
             lbl = []
             for label in self.labels:
