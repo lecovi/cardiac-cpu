@@ -221,7 +221,6 @@ class Coder(Cmd):
         'call': 9,
         'if=': 15,
         'if!': 16,
-        'sys': 20,
     }
     bc_map = {
         'int': [1,0],
@@ -235,8 +234,6 @@ class Coder(Cmd):
     }
     bc2_map = {
         'mov': 2,
-        'in': 3,
-        'out': 4,
         'add': 12,
         'sub': 13,
         'mul': 18,
@@ -255,6 +252,7 @@ class Coder(Cmd):
         if not isinstance(cpu, CPU):
             raise TypeError
         self.cpu = cpu
+        self.labels = {}
     def unknown_command(self, line):
         self.stdout.write('*** Unknown syntax: %s\n'%line)
     def emptyline(self):
@@ -262,6 +260,10 @@ class Coder(Cmd):
     def postcmd(self, stop, line):
         self.prompt = '%s ' % self.cpu.mem.ptr
         return stop
+    def get_label(self, lbl):
+        if lbl[0] == '*':
+            return self.labels[lbl[1:]]
+        return lbl
     def get_int(self, arg):
         try:
             return int(arg)
@@ -298,6 +300,7 @@ class Coder(Cmd):
                     self.cpu.mem.write16(self.get_int(a1))
                     self.cpu.mem.write16(self.get_int(a2))
                 else:
+                    arg = self.get_label(arg)
                     self.cpu.mem.write16(int(arg))
         elif op in self.bc_map:
             # This map is for operations which can take an 8-bit integer parameter.
@@ -317,10 +320,10 @@ class Coder(Cmd):
             xop = 0
             if a1.startswith('&'):
                 xop+=4
-                a1 = a1[1:]
+                a1 = str(self.get_label(a1[1:]))
             if a2.startswith('&'):
                 xop+=8
-                a2 = a2[1:]
+                a2 = str(self.get_label(a2[1:]))
             if a1 in self.var_map:
                 xop+=1
                 a1 = self.var_map[a1]
@@ -355,9 +358,19 @@ class Coder(Cmd):
     def do_ptr(self, args):
         """ Sets or returns the current pointer location in memory. """
         if args != '':
+            args = self.get_label(args)
             self.cpu.mem.ptr = int(args)
         else:
             print self.cpu.mem.ptr
+    def do_label(self, args):
+        """ Sets or prints a list of pointer variables. """
+        if args != '':
+            self.labels[args] = self.cpu.mem.ptr
+        else:
+            lbl = []
+            for label in self.labels:
+                lbl.append('%s=%s' % (label, self.labels[label]))
+            self.columnize(lbl)
     def do_dump(self, args):
         """ Dumps the byte at the current memory location. """
         if args != '':
@@ -684,8 +697,8 @@ class CPUCore(object):
             elif op == 8:
                 v = self.mem.read().b
                 if v > 0:
-                    src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
                     self.sp.value -= 2
+                    src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
                     getattr(self, self.var_map[v]).value = src
                 else:
                     self.pop_registers()
