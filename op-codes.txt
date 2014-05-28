@@ -1,0 +1,72 @@
+Simple CPU Simulator -- included CPU OP-CODES:
+
+INT:
+  byte-code: 1
+  Next byte should be the software interrupt to call.
+  See the interrupts.txt for list of possible interrupts.
+MOV:
+  byte-code: 2
+  Data moving operations, similar to the x86 instruction.
+  eg: mov ax,5
+      mov &50,65
+      mov bx,&50
+      mov &53,ax
+JMP:
+  byte-code: 6
+  Set CPU Memory pointer to the next read byte in memory.
+PUSH:
+  byte-code: 7
+  Pushes a register into the stack.
+  eg: push ptr
+  eg: push ax
+POP:
+  byte-code: 8
+  Restore the previously pushed register.
+  eg: pop ptr
+  eg: pop cx
+CALL:
+  byte-code: 9
+  PUSHes the next to execute CPU Memory pointer, then performs a JMP using the next read byte.
+INC:
+  byte-code: 10
+  Increments a register by 1.
+  eg: inc cx
+DEC:
+  byte-code: 11
+  Decreases a register by 1.
+  eg: dec bx
+ADD:
+  byte-code: 12
+  Increments a register by any amount.
+  eg: add cx,5
+SUB:
+  byte-code: 13
+  Decreases a register by any amount.
+  eg: sub bx,2
+MUL:
+  byte-code: 18
+  Multiplies a register with any amount.
+  eg: mul dx,2
+DIV:
+  byte-code: 19
+  Divides a register with any amount.
+  eg: div ax,4
+USE:
+  byte-code: 14
+  Sets a register to the address currently in the register.
+  eg: use cx
+IF=:
+  byte-code: 15
+  If CX equals the value in the next read byte, then set the CPU Memory pointer to DX.
+IF!:
+  byte-code: 16
+  If CX does not equals the value in the next read byte, then set the CPU Memory pointer to DX.
+IN:
+  byte-code: 3
+  Takes input from an IO port.
+OUT:
+  byte-code: 4
+  Sends a word to an IO port.
+HLT:
+  byte-code: 1
+  Halts the CPU/Terminate current execution and return to OS.

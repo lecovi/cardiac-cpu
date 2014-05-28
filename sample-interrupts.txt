@@ -1,0 +1,22 @@
+Simple CPU Simulator -- Simple Int table:
+
+All these software interrupts requires that "interrupt.bin" is loaded into memory,
+and that the interrupt vector table is pointing to it's address in memory.
+
+INT 5:
+  CPU Memory copying routine.
+  AX: source
+  BX: destination
+  CX: block size
+INT 8:
+  String compare routine.
+  AX: memory address of string 1
+  BX: memory address of string 2
+  Returns CX: Returns 0 if string matches, otherwise returns difference.
+INT 10:
+  Reads a 0-terminated string of bytes from CPU memory and display it on the screen.
+  AX: source
+INT 12:
+  Read raw input from the keyboard and store it in CPU Memory.
+  AX: CPU Memory location to store text to.
+  Returns CX: Length of string stored.
