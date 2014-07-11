@@ -2,30 +2,45 @@ Simple CPU Simulator -- Introduction
 
 This file is provided as an introduction to how this works internally, please see the other text files for usage.
 
-The CPU core is fully customizable, but if any of the memory sizes are changed, it can break compatibility with other binary files.
-That being said, if your goal of using this code is to build your own virtual machine for your application, then feel free to change the memory sizes to suit your requirements:
+The CPU core is fully customizable, but if any of the op-codes are changed, it can break compatibility with other binary files.
+That being said, if your goal of using this code is to build your own virtual machine for your application, then feel free to change the op-codes to suit your requirements.
 
-CPU Klass:
-  Here you can add new registers, which you will also need to add new op-codes for manipulating them.
-  Default registers use the Unit class to define them.
+CPU Klass(sub-class of CPUCore):
   In the __init__ of this class is where the CPU Memory, persistent storage, and shared memory is initialized.
-  mem is a Memory class, using the default size of 64 bytes.  Increase the 64 to increase the size of the binary files and available executable memory.
-  storage is a Storage class, which is a subclass of Memory, using the default size of 4K.  This is the persistent storage which is accessed using a software interrupt.  Various code can storage and access data from here.
-  imem is a Memory class, using the default size of 1K.  This is the shared memory, where executable code can store non-executable data.  If you want to execute data from here, you need to first move it into CPU Memory.
+  mem is a Memory class, using the default size of 4096 bytes.
   The __init__ function also manages the loading of an initial binary file into the CPU itself.
   Example to load and run a binary file:
     c = CPU('myapp')
     c.run()
   You can add a parameter into run() to tell it where to start executing, say if your binary file has a header.
 
+CPUCore Klass:
+  This class is where all the magic happens, you shouldn't need to alter anything in here unless you have very specific requirements.
+  Instead you should either sub-class this and implement the needed __init__ method to initialize memory and devices, or
+  use the included CPU class which has support for standard OS disk and memory storage.
+
+CPURegisters Klass:
+  This class controls the CPU registers, you can subclass this and add/remove registers by changing the class variables.
+  registers variable is a list of all the available registers.
+  pushable variable is a list of registers which can be pushed onto the stack without any adverse effects at runtime.
+
 InvalidInterrupt Exception:
   This exception is raised if your binary code attempts to call an unhandled interrupt.
 
+CPUException Exception:
+  This exception is raised if there is a bytecode runtime error, usually caused by an error in the user's bytecode.
+
 HelloWorldHook Klass(sub-class of BaseCPUHook):
-  This is an example CPU Hook to display how a hook is created and used, it provided 2 functions to your binary.
-  This CPU hook is attached to CPU op-code 60, and the op-code used in the Coder is 'hlo'.
-  Function 32 just displays hello world to standard output.
-  Function 33 is an example of a debugging function which displays the current state of the CPU registers.
+  This is an example CPU Hook to display how a hook is created and used, it provided 3 functions to your binary.
+  This CPU hook is attached to CPU I/O ports 32 and 33.
+  I/O port 32 just stores hello world to CPU memory.
+  I/O port 33 is an example of a debugging function which displays the current state of the CPU registers.
+
+ConIOHook Klass(sub-class of BaseCPUHook):
+  This implements a basic tty-based display and keyboard for basic input/output operations from the CPU.
+  This CPU hook is attached to CPU I/O ports 4000, and 8000.
+  I/O port 4000 is input only and reads a single key stroke from the keyboard.
+  I/O port 8000 is output only and writes a character to the screen.
 
 BaseCPUHook Klass:
   This class is intended to be extended with your own CPU Hook code.  Please see HelloWorldHook as an example.
@@ -52,24 +67,28 @@ Storage Klass(sub-class of Memory):
     self.storage = Storage('storage', 4096)
 
 Memory Klass:
-  This class is initialized with the size of memory to allocate(using StringIO).
+  This class is initialized with the size of memory to allocate(using mmap).
   There are many functions in this class which control the memory access facility, which the CPU uses.
   These functions will not be directly edited or used by you, as they are already implemented in the CPU op-codes.
   Essentually, this class is exposed as an array.  The CPU gets and sets memory locations using array syntax:
     mem[36] = 4
   This class also keeps track of the current pointer location, which is used by the CPU for various operations.
-  It is also able to read a null-terminated string with a helper function, which a software interrupt exposes.
+  It is also able to read a null-terminated string with a helper function.
   Other features include the clearing of all memory, local block copying, and local block clearing.
   Example:
     self.mem = Memory(64)
 
 Unit Klass:
-  This class I sometimes wonder if I really should have created it and built everything around it...
-  Here, the memory values are stored and validated to prevent Python exceptions.
-  It provides the facility to add and subtract Units or ints, and conditional matching.
-  It controls the attribute setting to prevent values outside the 255 range, which this CPU simulator does not yet support.
+  This is the base data Unit which this CPU Virtual Machine uses to exchange data between code, memory, and disk.
+  This class is meant to be sub-classed, see other Unit classes below for examples on how sub-classing works.
 
-Unit16 Klass:
-  This class is a subclass of Unit klass above, but is able to store 16-bit integers in 2-bytes.
+UInt8 Klass:
+  This is a Unit that only supports 8-bit integers.
+
+UInt16 Klass:
+  This is a Unit that only supports 16-bit integers. This Unit is mostly used with memory addresses.
+
+UInt32 Klass:
+  This is a Unit that only supports 32-bit integers. This is not used much in the code at all, as the VM isn't really 32-bit address enabled.
 
 Please read the other included text files for more information on how to use this CPU simulator toolkit.

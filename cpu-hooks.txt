@@ -1,38 +1,38 @@
 Simple CPU Simulator -- CPU Hooks interface
 
-CPU Hooks can allow custom op-codes to be added and removed like a plugin system.
-For example, say you temporarily add a virtual device attached to the CPU, then later remove it.
-The inserting/removing is controlled in Python and not by the op-codes/coder.
+The CPU Hooks interface has changed a lot since it was first released, it no longer supports custom op-code creation, as that
+made little sense, as CPUs don't just get new op-codes when you insert new hardware.  Rather they usually have their own
+memory addresses they access and that's how the CPU talks to the new hardware.  This I believe is called DMA(direct memory access).
 
-There is a Base class which must be sub-classed to make hooks work, there is an example Hook provided.
+The new hooks system works similar to the original system where you sub-class a special class and create methods there.
 
-Since these are custom op-codes being hooked into the CPU, there is of course no coder commands for these codes, as a result in order to use them, you must manually use the "set" coder command or add them via a hex-editor.
-The hooks have full access to the CPU core, it's registers, and attached memory and storage.
-A hook has the same ability as a standard software interrupt in the simulated CPU.
+The class you need to sub-class is BaseCPUHook, and you need to supply one class variable, called ports.  Here is an
+example Hello World one, taken from the previous Hooks example and tailored for the new system:
 
-You could for example create a hook which can create a GUI using wxWindows for example, or TK.
-A hook can also attach itself to the hosts network interface and allow your simulated CPU to access the Internet.
-
-Here is the example HelloWorldHook to see how easy it is to use:
-
---------------
 class HelloWorldHook(BaseCPUHook):
-    opcode = 60
-    opname = 'hlo'
-    def hook_32(self):
-        print "Hello World!"
-    def hook_33(self):
-        print "Current Register values:"
-        print self.cpu.ax.b
-        print self.cpu.bx.b
-        print self.cpu.cx.b
-        print self.cpu.dx.b
---------------
-In the coder interface, you can access both functions via:
---------------
-hlo 32
-hlo 33
-int 1
-boot 0
---------------
-With this new updated version, you can select the opname along with the opcode in the subclass, and the coder will use it.
+    """ This is an example I/O Hook which demonstrates how the I/O hook system works. """
+    ports = [32,33]
+    def out_32(self, addr):
+        self.addr = addr
+    def in_32(self):
+        self.cpu.mem[self.addr] = "Hello World!"
+        return self.addr
+    def out_33(self, reg):
+        sys.stdout.write("%s\n" % getattr(self.cpu, self.cpu.var_map[reg]).b)
+
+Here we are telling the CPU that this virtual I/O device can be accessed on CPU I/O ports 32 and 33.  And we supply some logic for
+these ports to work within the CPU/Virtual Machine.  The first method "out_32" is an OUTPUT method, where the CPU can send some
+data over to this virtual device to process.  This is in the form of a register, so it will be a 16-bit integer.  The second
+method "in_32" allows the CPU to request data from this virtual device, the data returned should be a 16-bit integer.
+
+To access these methods in your code using the included Coder interface, you can use them like so:
+
+mov ax,300
+out 32,ax
+in ax,32
+mov ax,1
+out 33,ax
+
+By using the standard OUT and IN operations you can write and read data from your virtual I/O device.
+The Virtual I/O device also has access to the CPU, and can access memory and other registers.
+You can use "self.cpu" to access the connected CPUs resources.
