@@ -612,9 +612,10 @@ class CPUCore(object):
     def hook_cleanup(self):
         for hook in self.cpu_hooks:
             self.cpu_hooks[hook].cleanup()
-    def clear_registers(self):
+    def clear_registers(self, persistent=[]):
         for reg in self.var_map:
-            getattr(self.regs, reg).value = 0
+            if reg not in persistent:
+                getattr(self.regs, reg).value = 0
     def push_registers(self, regs=None):
         if regs is None:
             regs = self.regs.pushable
@@ -628,6 +629,21 @@ class CPUCore(object):
             self.sp.value -= 2
             src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
             getattr(self.regs, reg).value = src
+    def push_value(self, value):
+        try:
+            value = int(value)
+            self.mem[self.ss.b+self.sp.b] = UInt16(value)
+            self.sp.value += 2
+        except:
+            self.mem.ptr = self.ds.b
+            self.mem.write(value+chr(0))
+            self.mem[self.ss.b+self.sp.b] = UInt16(0)
+            self.sp.value += 2
+    def pop_value(self):
+        if self.sp.value > 0:
+            self.sp.value -= 2
+            return self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
+        raise CPUException('Stack out of range.')
     def get_xop(self, trans=True):
         """ This handy function to translate the xop code and return a proper integer from the source. """
         xop = self.mem.read().b
@@ -640,12 +656,14 @@ class CPUCore(object):
             # Memory address is the source.
             src = self.mem[self.ds.b+src].b
         return xop,dst,src
-    def run(self, cs=0):
-        self.clear_registers()
+    def run(self, cs=0, persistent=[]):
+        self.clear_registers(persistent)
         self.regs.cs.value = cs
         self.mem.ptr = 0
         exitcode = 0
         int_table = 4000
+        del persistent
+        del cs
         if termios:
             attr = termios.tcgetattr(sys.stdin)
             oldattr = attr[3]
@@ -721,7 +739,8 @@ class CPUCore(object):
                     self.pop_registers()
             elif op == 9:
                 jmp = self.mem.read16()
-                self.mem[self.ss.b+self.sp.b] = self.mem.ptr
+                self.ip.value = self.mem.ptr-self.cs.b
+                self.push_registers(['cs','ip'])
                 self.mem.ptr = jmp.b+self.cs.b
             elif op == 10:
                 v = self.mem.read().b
