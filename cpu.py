@@ -7,12 +7,18 @@ except ImportError:
     termios = None
 
 class CPUException(Exception):
+    """ This exception is raised if there is a bytecode runtime error, usually caused by an error in the user's bytecode. """
     pass
 
 class InvalidInterrupt(CPUException):
+    """ This exception is raised if the user's code trying to access an I/O port on the CPU which has yet to be written/configured. """
     pass
 
 class Unit(object):
+    """
+    This is the base data Unit which this CPU Virtual Machine uses to exchange data between code, memory, and disk.
+    This class is meant to be sub-classed, see other Unit classes below for examples on how sub-classing works.
+    """
     def __init__(self, default=0):
         self.struct = struct.Struct(self.fmt)
         self.value = default
@@ -21,6 +27,7 @@ class Unit(object):
         return self._value
     @value.setter
     def value(self, value):
+        """ This method controls how the value of this unit is set. This is the external API to the Unit's value that every function uses to set the value. """
         if isinstance(value, int):
             self._value = value
         elif isinstance(value, str):
@@ -65,21 +72,31 @@ class Unit(object):
         return self.value
     @property
     def b(self):
+        """ This returns the *byte* representation of this Unit, this is an alternative to using .value property.  It is used interchangable in the code. """
         return self.value
     @property
     def c(self):
+        """ This method returns the character representation of the Unit.  This is normally used to display an ACSII value to the user, or to store the data to memory or disk. """
         return self.struct.pack(self.value)
 
 class UInt8(Unit):
+    """ This is a Unit that only supports 8-bit integers. """
     fmt = 'B'
 
 class UInt16(Unit):
+    """ This is a Unit that only supports 16-bit integers. This Unit is mostly used with memory addresses. """
     fmt = 'H'
 
 class UInt32(Unit):
+    """ This is a Unit that only supports 32-bit integers. This is not used much in the code at all, as the VM isn't really 32-bit address enabled. """
     fmt = 'L'
 
 class Memory(object):
+    """
+    This class represents the CPU or Virtual Machine memory/address space.
+    It is a flat memory model with no concepts of blocks, the entire memory model is a single accessible block of continuous memory.
+    Very similar to the memory model of old 8-bit home computers, like the Apple family of computers.
+    """
     def __init__(self, size):
         self.mem = mmap.mmap(-1, size)
         self.size = size
@@ -191,6 +208,12 @@ class Memory(object):
         self.mem.seek(self._ptr)
 
 class Storage(Memory):
+    """
+    This is a special sub-class of Memory which supports disk-backed memory storage.
+    The storage space is accessed using the exact same API as the memory space.
+    This makes both the Memory class and the Storage classes interchangable in code, which can enable persistent memory for your VM.
+    This Storage class also uses the OS level mmap, so multiple Virtual Machines can be running and accessing the same memory space.
+    """
     def __init__(self, filename, size):
         try:
             self.file = open(filename, 'r+b')
@@ -214,6 +237,13 @@ class Storage(Memory):
         self.mem.resize(newsize)
 
 class Coder(Cmd):
+    """
+    This is the new-style Coder class, it uses the standard Python Cmd module to create an easy to use assembler.
+    The following dictionary maps here control the bytecodes which are written to memory during the assembly process.
+    bc16_map is for bytecodes that support one or two 16-bit integers as parameters.
+    bc_map is for bytecodes that only support 8-bit integers, and a single parameter.
+    bc2_map is for bytecodes that support complex parameter types and require extra metadata to function at runtime.
+    """
     bc16_map = {
         'in': 3,
         'out': 4,
@@ -545,6 +575,9 @@ class Coder(Cmd):
             os.chmod(s[0], 33188)
 
 class BaseCPUHook(object):
+    """
+    This is the base class to extend the VM/CPU using virtual I/O ports.
+    """
     def __init__(self, cpu):
         if not isinstance(cpu, CPU):
             raise TypeError
@@ -562,9 +595,11 @@ class BaseCPUHook(object):
         func = self.get_handler(i, 'out')
         func(v)
     def cleanup(self):
+        """ If this is overridden and does something in your own IO hook, then it is called when the CPU halts.  Great for closing files, pipes, etc... """
         pass
 
 class HelloWorldHook(BaseCPUHook):
+    """ This is an example I/O Hook which demonstrates how the I/O hook system works. """
     ports = [32,33]
     def out_32(self, addr):
         self.addr = addr
@@ -595,6 +630,13 @@ class CPURegisters(object):
             setattr(self, reg, UInt16())
 
 class CPUCore(object):
+    """
+    This class is the core CPU/Virtual Machine class.  It has most of the runtime that should be platform independent.
+    This class does not contain any code that can touch the host operating environment, so it cannot load or save data.
+    Depending on how or where you want the binary data/memory to be located in the host environment, let it be on disk, or in a database,
+    you will need to subclass this and enable your specific environment's functionality.
+    The other class below this CPU, should work on most operating systems to access standard disk and memory.
+    """
     @property
     def var_map(self):
         return self.regs.registers
@@ -657,6 +699,10 @@ class CPUCore(object):
             src = self.mem[self.ds.b+src].b
         return xop,dst,src
     def run(self, cs=0, persistent=[]):
+        """
+        This method is where all the magic happens, and where bytecode execution starts.
+        You can optionally pass a custom code segment to start at, and what registers shouldn't be cleared before execution.
+        """
         self.clear_registers(persistent)
         self.regs.cs.value = cs
         self.mem.ptr = 0
@@ -680,16 +726,16 @@ class CPUCore(object):
                 sys.stdout.write('\n')
             if op == 1:
                 i = self.mem.read().b
-                if i > 0:
+                if i > 0: # INT operation/Software interrupt
                     self.ip.value = self.mem.ptr-self.cs.b
                     self.push_registers(['cs','ip'])
                     jmp = self.mem[i*2+int_table:i*2+int_table+2].b
                     self.regs.cs.value = jmp
                     self.ip.value = 0
-                else:
+                else: # RET operation/Return from an INT or CALL.
                     self.pop_registers(['ip','cs'])
                 continue
-            elif op == 2:
+            elif op == 2: # MOV operation/Memory moving
                 xop,dst,src = self.get_xop()
                 if xop in [1,3,9,11]:
                     # Register is destination
@@ -705,23 +751,23 @@ class CPUCore(object):
                 else:
                     # Moves data into register.
                     dst.value = src
-            elif op == 3:
+            elif op == 3: # IN operation/Standard I/O
                 v = self.mem.read16().b
                 port = self.mem.read16().b
                 if self.cpu_hooks.has_key(port):
                     getattr(self, self.var_map[v]).value = self.cpu_hooks[port].input(port)
-            elif op == 4:
+            elif op == 4: # OUT operation/Standard I/O
                 port = self.mem.read16().b
                 v = self.mem.read16().b
                 if self.cpu_hooks.has_key(port):
                     self.cpu_hooks[port].output(port, getattr(self, self.var_map[v]).b)
-            elif op == 5:
+            elif op == 5: # HLT operation/Halts the CPU
                 exitcode = self.mem.read().b
                 break
-            elif op == 6:
+            elif op == 6: # JMP operation
                 jmp = self.mem.read16()
                 self.mem.ptr = jmp.b+self.cs.b
-            elif op == 7:
+            elif op == 7: # PUSH operation/Pushes a register onto the stack
                 v = self.mem.read().b
                 if v > 0:
                     src = getattr(self, self.var_map[v])
@@ -729,7 +775,7 @@ class CPUCore(object):
                     self.sp.value += 2
                 else:
                     self.push_registers()
-            elif op == 8:
+            elif op == 8: # POP operation/Pops a register off the stack
                 v = self.mem.read().b
                 if v > 0:
                     self.sp.value -= 2
@@ -737,12 +783,12 @@ class CPUCore(object):
                     getattr(self, self.var_map[v]).value = src
                 else:
                     self.pop_registers()
-            elif op == 9:
+            elif op == 9: # CALL operation/Jumps to an address after pushing the code segment and instruction pointer onto the stack
                 jmp = self.mem.read16()
                 self.ip.value = self.mem.ptr-self.cs.b
                 self.push_registers(['cs','ip'])
                 self.mem.ptr = jmp.b+self.cs.b
-            elif op == 10:
+            elif op == 10: # INC operation/Increments a register by one
                 v = self.mem.read().b
                 vn = self.var_map[v]
                 reg = getattr(self, vn).b
@@ -751,7 +797,7 @@ class CPUCore(object):
                     getattr(self, vn).value = reg
                 else:
                     raise CPUException('Program attempted to change IP.')
-            elif op == 11:
+            elif op == 11: # DEC operation/Decreases a register by one
                 v = self.mem.read().b
                 vn = self.var_map[v]
                 reg = getattr(self, vn).b
@@ -760,21 +806,21 @@ class CPUCore(object):
                     getattr(self, vn).value = reg
                 else:
                     raise CPUException('Program attempted to change IP.')
-            elif op == 12:
+            elif op == 12: # ADD operation/Adds two values
                 xop,dst,src = self.get_xop()
                 if xop not in [1,3,6,9,11]:
                     raise CPUException('ADD, SUB, MUL, DIV operations expect the destination to be a register.')
                 # Register is destination
                 dst = getattr(self, self.var_map[dst])
                 dst.value += src
-            elif op == 13:
+            elif op == 13: # SUB operation/Subtracts one value from another
                 xop,dst,src = self.get_xop()
                 if xop not in [1,3,6,9,11]:
                     raise CPUException('ADD, SUB, MUL, DIV operations expect the destination to be a register.')
                 # Register is destination
                 dst = getattr(self, self.var_map[dst])
                 dst.value -= src
-            elif op == 14:
+            elif op == 14: # USE operation/Copies the memory address of the register into the register
                 v = self.mem.read().b
                 vn = self.var_map[v]
                 reg = getattr(self, vn)
@@ -783,13 +829,13 @@ class CPUCore(object):
                     getattr(self, vn).value = reg.b
                 else:
                     raise CPUException('Program attempted to change IP.')
-            elif op == 15:
+            elif op == 15: # IF= operation/Jumps if CX == value
                 if self.cx.b == self.mem.read16().b:
                     self.mem.ptr = self.dx.b+self.cs.b
-            elif op == 16:
+            elif op == 16: # IF! operation/Jumps if CX != value
                 if self.cx.b != self.mem.read16().b:
                     self.mem.ptr = self.dx.b+self.cs.b
-            elif op == 17:
+            elif op == 17: # CMP operation/Compares two values
                 xop,dst,src = self.get_xop()
                 if xop in [1,3,9,11]:
                     # Register is destination
@@ -806,14 +852,14 @@ class CPUCore(object):
                     # Compares data and register.
                     result = src - dst.value
                 self.cx.value = result
-            elif op == 18:
+            elif op == 18: # MUL operation/Multiplies two values together
                 xop,dst,src = self.get_xop()
                 if xop not in [1,3,6,9,11]:
                     raise CPUException('ADD, SUB, MUL, DIV operations expect the destination to be a register.')
                 # Register is destination
                 dst = getattr(self, self.var_map[dst])
                 dst.value *= src
-            elif op == 19:
+            elif op == 19: # DIV operation/Divides two values
                 xop,dst,src = self.get_xop()
                 if xop not in [1,3,6,9,11]:
                     raise CPUException('ADD, SUB, MUL, DIV operations expect the destination to be a register.')
@@ -829,14 +875,14 @@ class CPUCore(object):
         return exitcode
 
 class CPU(CPUCore):
+    """
+    This is the main class which most applications should use to access the CPU/Virtual Machine.
+    This class implements a 4k memory space with the ability to save and load binary data from disk.
+    """
     cpu_memory = 4096
-    storage = 4096
-    shared_memory = 1024
     def __init__(self, filename=None, compressed=False):
         self.regs = CPURegisters()
         self.mem = Memory(self.cpu_memory)
-        self.storage = Storage('storage', self.shared_memory) if self.storage > 0 else None
-        self.imem = Memory(self.shared_memory) if self.shared_memory > 0 else None
         self.cpu_hooks = {}
         if filename != None:
             self.loadbin(filename, compressed=compressed)
