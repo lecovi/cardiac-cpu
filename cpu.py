@@ -141,10 +141,6 @@ class Memory(object):
         self.mem.seek(self._ptr)
         return value
     def __setitem__(self, key, value):
-        hook = self.__check_hook(key)
-        if hook is not None:
-            if not hook.memset(key, value):
-                return
         self.__check_key(key)
         self.mem.seek(key)
         if isinstance(value, Unit):
@@ -643,7 +639,8 @@ class HelloWorldHook(BaseCPUHook):
             self.count = 0
         self.count += 1
     def memset(self, addr, value):
-        self.count = int(value)
+        self.count = ord(value)
+        return True
 
 class ConIOHook(BaseCPUHook):
     """ This implements a basic tty-based display and keyboard for basic input/output operations from the CPU. """
@@ -656,8 +653,6 @@ class ConIOHook(BaseCPUHook):
             return ord(sys.stdin.read(1))
         else:
             raise CPUException("CPU: Single key input not supported on this platform.")
-    def cycle_8000(self):
-        self.cpu.mem[100] += 1
 
 class CPURegisters(object):
     """ This class contains all the CPU registers and manages them. """
