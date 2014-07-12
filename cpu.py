@@ -102,6 +102,7 @@ class Memory(object):
         self.size = size
         self._ptr_stack = []
         self._ptr = 0
+        self.mem_hooks = {}
     def clear(self):
         self.mem.seek(0)
         self.mem.write('\x00' * self.size)
@@ -116,6 +117,12 @@ class Memory(object):
         if key < 0 or key > self.size-1:
             raise IndexError
         self._ptr = self.ptr
+    def __check_hook(self, key):
+        for ranges in self.mem_hooks.keys():
+            a,b = ranges.split(':')
+            if key >= int(a) and key <= int(b):
+                return self.mem_hooks[ranges]
+        return None
     def __getitem__(self, key):
         if isinstance(key, slice):
             stop = key.stop
@@ -134,6 +141,10 @@ class Memory(object):
         self.mem.seek(self._ptr)
         return value
     def __setitem__(self, key, value):
+        hook = self.__check_hook(key)
+        if hook is not None:
+            if not hook.memset(key, value):
+                return
         self.__check_key(key)
         self.mem.seek(key)
         if isinstance(value, Unit):
@@ -170,6 +181,10 @@ class Memory(object):
             return UInt16(self.mem.read(2))
         return UInt8(self.mem.read(1))
     def write(self, value):
+        hook = self.__check_hook(self.ptr)
+        if hook is not None:
+            if not hook.memset(self.ptr, value):
+                return
         if isinstance(value, Unit):
             self.mem.write(value.c)
         elif isinstance(value, int):
@@ -184,6 +199,10 @@ class Memory(object):
         else:
             raise ValueError
     def write16(self, value):
+        hook = self.__check_hook(self.ptr)
+        if hook is not None:
+            if not hook.memset(self.ptr, value):
+                return
         if self.size > 256:
             self.mem.write(UInt16(value).c)
         else:
@@ -594,6 +613,14 @@ class BaseCPUHook(object):
     def output(self, i, v):
         func = self.get_handler(i, 'out')
         func(v)
+    def memset(self, addr, value):
+        pass
+    def cycle(self, port):
+        try:
+            func = self.get_handler(port, 'cycle')
+            func()
+        except InvalidInterrupt:
+            pass
     def cleanup(self):
         """ If this is overridden and does something in your own IO hook, then it is called when the CPU halts.  Great for closing files, pipes, etc... """
         pass
@@ -601,6 +628,7 @@ class BaseCPUHook(object):
 class HelloWorldHook(BaseCPUHook):
     """ This is an example I/O Hook which demonstrates how the I/O hook system works. """
     ports = [32,33]
+    memory_map = '100:120'
     def out_32(self, addr):
         self.addr = addr
     def in_32(self):
@@ -608,6 +636,14 @@ class HelloWorldHook(BaseCPUHook):
         return self.addr
     def out_33(self, reg):
         sys.stdout.write("%s\n" % getattr(self.cpu, self.cpu.var_map[reg]).b)
+    def in_33(self):
+        return self.count
+    def cycle_33(self):
+        if not hasattr(self, 'count'):
+            self.count = 0
+        self.count += 1
+    def memset(self, addr, value):
+        self.count = int(value)
 
 class ConIOHook(BaseCPUHook):
     """ This implements a basic tty-based display and keyboard for basic input/output operations from the CPU. """
@@ -620,6 +656,8 @@ class ConIOHook(BaseCPUHook):
             return ord(sys.stdin.read(1))
         else:
             raise CPUException("CPU: Single key input not supported on this platform.")
+    def cycle_8000(self):
+        self.cpu.mem[100] += 1
 
 class CPURegisters(object):
     """ This class contains all the CPU registers and manages them. """
@@ -651,6 +689,8 @@ class CPUCore(object):
         hook = klass(self)
         for port in hook.ports:
             self.cpu_hooks.update({port: hook})
+        if hasattr(hook, 'memory_map'):
+            self.mem.mem_hooks.update({hook.memory_map: hook})
     def hook_cleanup(self):
         for hook in self.cpu_hooks:
             self.cpu_hooks[hook].cleanup()
@@ -698,6 +738,9 @@ class CPUCore(object):
             # Memory address is the source.
             src = self.mem[self.ds.b+src].b
         return xop,dst,src
+    def hook_cycle(self):
+        for port in self.cpu_hooks:
+            self.cpu_hooks[port].cycle(port)
     def run(self, cs=0, persistent=[]):
         """
         This method is where all the magic happens, and where bytecode execution starts.
@@ -719,6 +762,7 @@ class CPUCore(object):
             self.mem.ptr = self.cs.b+self.ip.b
             if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
             if self.mem.eom: break
+            self.hook_cycle()
             op = self.mem.read().b
             if 'stepping' in self.__dict__ and op > 0:
                 for reg in self.regs.registers:
