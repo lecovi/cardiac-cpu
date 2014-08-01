@@ -943,12 +943,65 @@ class CPU(CPUCore):
             open(filename, 'wb').write(zlib.compress(self.mem.mem.read(size)))
         self.mem.pop()
 
+def main():
+    from optparse import OptionParser
+    parser = OptionParser()
+    parser.add_option('-f', '--filename', dest='filename', help='The binary file to execute in the virtual machine')
+    parser.add_option('--source', dest='source', help='Compile source code file into a binary image')
+    parser.add_option('-c', '--cli', action='store_true', dest='cli', default=False, help='Start the command-line assembler/debugger')
+    parser.add_option('--cs', '--codeseg', type='int', dest='cs', default=0, help='Set a custom code segment')
+    parser.add_option('--ds', '--dataseg', type='int', dest='ds', default=3000, help='Set a custom data segment')
+    parser.add_option('--ss', '--stackseg', type='int', dest='ss', default=2900, help='Set a custom stack segment')
+    parser.add_option('--it', '--inttable', dest='inttbl', default='interrupt.tbl', help='Use a custom interrupt table')
+    parser.add_option('--ib', '--intbin', dest='intbin', default='interrupt.bin', help='Use a custom interrupt binary')
+    parser.add_option('--iba', '--intaddr', type='int', dest='intaddr', default=1000, help='Set a custom address for the interrupt binary')
+    parser.add_option('-i', '--integer', type='int', dest='integer', help='Place an integer onto the stack')
+    parser.add_option('-s', '--string', dest='string', help='Please a zero terminated string into the data segment')
+    options, args = parser.parse_args()
+    del args
+    c = CPU()
+    if options.source:
+        try:
+            source = open(options.source, 'r').readlines()
+        except:
+            parser.error('Source file not found.')
+            sys.exit(1)
+        cli = Coder()
+        cli.configure(c)
+        for line in source:
+            cli.cmdqueue.append(line)
+        cli.cmdqueue.append('.')
+        cli.cmdloop('Assembling %s...' % options.source)
+        fname = options.source.split('.')
+        c.savebin('%s.bin' % fname[0], 0, c.mem.ptr)
+        sys.exit(0)
+    if options.filename is None:
+        options.cli = True
+    else:
+        c.loadbin(options.filename, options.cs)
+    c.loadbin(options.inttbl, 4000)
+    c.loadbin(options.intbin, options.intaddr)
+    c.add_cpu_hook(ConIOHook)
+    if options.cli:
+        cli = Coder()
+        cli.configure(c)
+        cli.cmdloop()
+    else:
+        c.ds.value = options.ds
+        c.ss.value = options.ss
+        if options.integer:
+            c.mem[c.ss.b] = UInt16(options.integer)
+            c.sp.value = 2
+        if options.string:
+            c.mem.ptr = c.ds.b
+            c.mem.write(options.string+chr(0))
+            c.mem[c.ss.b] = UInt16(0)
+            c.sp.value = 2
+        try:
+            c.run(options.cs, ['ds', 'ss', 'sp'])
+        except CPUException, e:
+            print e
+
 if __name__ == '__main__':
     import readline
-    c = CPU()
-    c.loadbin('interrupt.tbl', 4000)
-    c.loadbin('interrupt.bin', 1000)
-    c.add_cpu_hook(ConIOHook)
-    cli = Coder()
-    cli.configure(c)
-    cli.cmdloop()
+    main()

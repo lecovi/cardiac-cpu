@@ -1,22 +1,9 @@
 Simple CPU Simulator -- Hello World example code:
 
-This is the source code for hello.bin, which you can view in a hex editor:
+This is the source code for hello.bin is in hello.asm.  To assmeble this file into hello.bin, run the following command:
 
----------
-mov ss,*stackseg
-jmp *main
-label hello
-data "Hello Simple CPU Simulator!"
-label main
-mov ax,*hello
-int 10
-mov ax,10
-out 8000,ax
-hlt
-label stackseg
-ptr 0
-savebin hello.bin 55
-boot
----------
+python cpu.py --source hello.asm
 
-If you enter in this exact code into the Coder interface, it will generate hello.bin.
+Then to run the binary file in the virtual machine, use the following command:
+
+python cpu.pu -f hello.bin
