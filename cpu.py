@@ -299,6 +299,7 @@ class Coder(Cmd):
             raise TypeError
         self.cpu = cpu
         self.labels = {}
+        self.cseg = 0
     def unknown_command(self, line):
         self.stdout.write('*** Unknown syntax: %s\n'%line)
     def emptyline(self):
@@ -408,7 +409,7 @@ class Coder(Cmd):
         else:
             ptr = self.cpu.mem.ptr
         try:
-            rt = self.cpu.run(ptr)
+            rt = self.cpu.run(ptr, ['ds', 'ss'])
             self.stdout.write('Exit Code: %s\n' % rt)
         except CPUException, e:
             print e
@@ -422,17 +423,42 @@ class Coder(Cmd):
     def do_label(self, args):
         """ Sets or prints a list of pointer variables. """
         if args != '':
+            if args.startswith('!'):
+                self.cseg = 0
             if args in self.labels:
-                self.labels[args][0] = self.cpu.mem.ptr
+                self.labels[args][0] = self.cpu.mem.ptr-self.cseg
                 for ptr in self.labels[args][1]:
                     self.cpu.mem[ptr] = UInt16(self.labels[args][0])
             else:
-                self.labels[args] = [self.cpu.mem.ptr, []]
+                self.labels[args] = [self.cpu.mem.ptr-self.cseg, []]
+            if args.startswith('!'):
+                self.cseg = self.cpu.mem.ptr
         else:
             lbl = []
             for label in self.labels:
                 lbl.append('%s=%s' % (label, self.labels[label]))
             self.columnize(lbl)
+    def do_reg(self, args):
+        """ Sets any CPU register immediately. """
+        s = shlex.split(args)
+        if len(s) == 2:
+            try:
+                v = int(s[1])
+            except:
+                self.stdout.write('Usage: reg ds 400\n')
+                return
+            if s[0] in self.cpu.regs.registers:
+                getattr(self.cpu, s[0]).value = v
+            else:
+                self.stdout.write('Valid registers: %s' % ', '.join(self.cpu.regs.registers))
+        else:
+            self.stdout.write('Usage: reg ds 400\n')
+    def do_cseg(self, args):
+        """ Sets the current code-segment for the pointer label system. """
+        if args != '':
+            self.cseg = int(args)
+        else:
+            self.cseg = self.cpu.mem.ptr
     def do_dump(self, args):
         """ Dumps the byte at the current memory location. """
         if args != '':
@@ -456,7 +482,10 @@ class Coder(Cmd):
         """ Saves the current binary image in memory to disc. """
         s = shlex.split(args)
         if len(s) > 0:
-            self.cpu.savebin(s[0], self.cpu.mem.ptr, int(s[1]))
+            if len(s) == 1:
+                self.cpu.savebin(s[0], 0, self.cpu.mem.ptr)
+            else:
+                self.cpu.savebin(s[0], self.cpu.mem.ptr, int(s[1]))
     def do_loadbin(self, args):
         """ Loads a binary image from disc into memory. """
         s = shlex.split(args)
@@ -471,7 +500,8 @@ class Coder(Cmd):
         """ Stores a zero-terminated string to the current memory address. """
         s = shlex.split(args)
         if len(s) > 0:
-            for c in s[0]:
+            data = s[0].replace('\\n', '\n').replace('\\x00', '\x00')
+            for c in data:
                 self.cpu.mem.write(ord(c))
             self.cpu.mem.write(0)
     def do_set(self, args):
@@ -982,13 +1012,13 @@ def main():
     c.loadbin(options.inttbl, 4000)
     c.loadbin(options.intbin, options.intaddr)
     c.add_cpu_hook(ConIOHook)
+    c.ds.value = options.ds
+    c.ss.value = options.ss
     if options.cli:
         cli = Coder()
         cli.configure(c)
         cli.cmdloop()
     else:
-        c.ds.value = options.ds
-        c.ss.value = options.ss
         if options.integer:
             c.mem[c.ss.b] = UInt16(options.integer)
             c.sp.value = 2
