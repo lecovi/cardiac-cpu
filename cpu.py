@@ -78,18 +78,65 @@ class Unit(object):
     def c(self):
         """ This method returns the character representation of the Unit.  This is normally used to display an ACSII value to the user, or to store the data to memory or disk. """
         return self.struct.pack(self.value)
+    def bit(self, offset, value=None):
+        if value is None:
+            return True if self._value & (1 << offset) > 0 else False
+        elif value == True:
+            self._value = self._value | (1 << offset)
+        elif value == False:
+            self._value = self._value & ~(1 << offset)
+        else:
+            raise ValueError('Invalid value given to bit operation.')
+    def toggle(self, offset):
+        self._value = self._value ^ (1 << offset)
 
 class UInt8(Unit):
     """ This is a Unit that only supports 8-bit integers. """
     fmt = 'B'
+    @property
+    def lsb(self):
+        return self._value&0xF
+    @lsb.setter
+    def lsb(self, value):
+        self._value|=value
+    @property
+    def msb(self):
+        return self._value>>4
+    @msb.setter
+    def msb(self, value):
+        self._value|=(value<<4)
 
 class UInt16(Unit):
     """ This is a Unit that only supports 16-bit integers. This Unit is mostly used with memory addresses. """
     fmt = 'H'
+    @property
+    def lsb(self):
+        return UInt8(self._value&0xFF)
+    @lsb.setter
+    def lsb(self, value):
+        self._value|value
+    @property
+    def msb(self):
+        return UInt8(self._value>>8)
+    @msb.setter
+    def msb(self, value):
+        self._value|=(value<<8)
 
 class UInt32(Unit):
     """ This is a Unit that only supports 32-bit integers. This is not used much in the code at all, as the VM isn't really 32-bit address enabled. """
     fmt = 'L'
+    @property
+    def lsb(self):
+        return UInt16(self._value&0xFFFF)
+    @lsb.setter
+    def lsb(self, value):
+        self._value|value
+    @property
+    def msb(self):
+        return UInt16(self._value>>16)
+    @msb.setter
+    def msb(self, value):
+        self._value|=(value<<16)
 
 class Memory(object):
     """
@@ -258,14 +305,15 @@ class Coder(Cmd):
     bc16_map is for bytecodes that support one or two 16-bit integers as parameters.
     bc_map is for bytecodes that only support 8-bit integers, and a single parameter.
     bc2_map is for bytecodes that support complex parameter types and require extra metadata to function at runtime.
+    bc0_map is for simple bytecodes that don't take any parameters at all.
     """
     bc16_map = {
         'in': 3,
         'out': 4,
         'jmp': 6,
         'call': 9,
-        'if=': 15,
-        'if!': 16,
+        'je': 15,
+        'jne': 16,
     }
     bc_map = {
         'int': [1,0],
@@ -275,15 +323,23 @@ class Coder(Cmd):
         'pop': [8,0],
         'inc': [10,3],
         'dec': [11,3],
-        'use': [14,3],
     }
     bc2_map = {
         'mov': 2,
         'add': 12,
         'sub': 13,
+        'test': 14,
         'cmp': 17,
         'mul': 18,
         'div': 19,
+        'and': 22,
+        'or': 23,
+        'xor': 24,
+        'not': 25,
+    }
+    bc0_map = {
+        'pushf': 20,
+        'popf': 21,
     }
     prompt = '0 '
     @property
@@ -347,7 +403,10 @@ class Coder(Cmd):
                 self.cpu.mem.ptr = ptr
             except:
                 pass
-        if op in self.bc16_map:
+        if op in self.bc0_map:
+            # This map is for simple operations that don't take any parameters.
+            self.cpu.mem.write(self.bc0_map[op])
+        elif op in self.bc16_map:
             # This map is for operations which can take a 16-bit integer parameter.
             self.cpu.mem.write(self.bc16_map[op])
             if arg != '':
@@ -373,22 +432,19 @@ class Coder(Cmd):
                 self.unknown_command(line)
                 return
             self.cpu.mem.write(self.bc2_map[op])
-            xop = 0
+            xop = UInt8()
             if a1.startswith('&'):
-                xop+=4
+                xop.bit(0, True)
                 a1 = a1[1:]
             if a2.startswith('&'):
-                xop+=8
+                xop.bit(2, True)
                 a2 = a2[1:]
             if a1 in self.var_map:
-                xop+=1
+                xop.bit(1, True)
                 a1 = self.var_map[a1]
             if a2 in self.var_map:
-                xop+=2
+                xop.bit(3, True)
                 a2 = self.var_map[a2]
-            if xop in [0,2,8,12,15]:
-                self.unknown_command(line)
-                return
             self.cpu.mem.write(xop)
             if isinstance(a1, str):
                 a1 = self.get_label(a1)
@@ -545,6 +601,12 @@ class Coder(Cmd):
         for reg in self.cpu.regs.registers:
             reglist.append('%s=%s\t' % (reg.upper(), getattr(self.cpu, reg).b))
         self.columnize(reglist)
+    def do_flags(self, args):
+        """ Prints the current state of the CPU flags. """
+        flaglist = []
+        for flag in range(0,7):
+            flaglist.append('FLAG%s=%s' % (flag, self.cpu.flags.bit(flag)))
+        self.columnize(flaglist)
     def do_memcopy(self, args):
         """ Performs a memory copy operation. """
         s = shlex.split(args)
@@ -686,7 +748,7 @@ class ConIOHook(BaseCPUHook):
 
 class CPURegisters(object):
     """ This class contains all the CPU registers and manages them. """
-    registers = ['ip','ax','bx','cx','dx','sp','bp','si','di','cs','ds','es','ss']
+    registers = ['ip','ax','bx','cx','dx','sp','bp','si','di','cs','ds','es','ss','cr']
     pushable = ['ip','ax','bx','cx','dx','si','di','cs','ds','es']
     def __init__(self):
         for reg in self.registers:
@@ -751,15 +813,24 @@ class CPUCore(object):
             self.sp.value -= 2
             return self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
         raise CPUException('Stack out of range.')
-    def get_xop(self, trans=True):
+    def get_xop(self, dst=None, errmsg='Internal value error.'):
         """ This handy function to translate the xop code and return a proper integer from the source. """
-        xop = self.mem.read().b
-        xop_map = {1:'<BH', 3:'<BB', 4:'<HH', 5:'<BH', 6:'<HB', 7:'<BB', 9:'<BH', 11:'<BB'}
-        dst,src = struct.unpack(xop_map[xop], self.mem.read(struct.calcsize(xop_map[xop])))
-        if xop in [3,6,7,11]:
+        xop = self.mem.read()
+        if dst is not None:
+            if not xop.bit(dst):
+                raise CPUException(errmsg)
+        xop_map = {1:'<HH', # MEM,IMED
+                   2:'<BH', # REG,IMED
+                   5:'<HH', # MEM,MEM
+                   6:'<BH', # REG,MEM
+                   9:'<HB', # MEM,REG
+                   10:'<BB' # REG,REG
+        }
+        dst,src = struct.unpack(xop_map[xop.b], self.mem.read(struct.calcsize(xop_map[xop.b])))
+        if xop.bit(3):
             # Register is source.
             src = getattr(self, self.var_map[src]).b
-        if xop in [9,11]:
+        elif xop.bit(2):
             # Memory address is the source.
             src = self.mem[self.ds.b+src].b
         return xop,dst,src
@@ -775,7 +846,7 @@ class CPUCore(object):
         self.regs.cs.value = cs
         self.mem.ptr = 0
         exitcode = 0
-        int_table = 4000
+        int_table = len(self.mem)-512
         del persistent
         del cs
         if termios:
@@ -806,20 +877,13 @@ class CPUCore(object):
                 continue
             elif op == 2: # MOV operation/Memory moving
                 xop,dst,src = self.get_xop()
-                if xop in [1,3,9,11]:
-                    # Register is destination
-                    dst = getattr(self, self.var_map[dst])
-                elif xop in [5,7]:
-                    dst = getattr(self, self.var_map[dst]).b
-                if xop in [9,11]:
-                    # Moves memory address into register.
-                    dst.value = src
-                elif xop in [4,5,6,7]:
-                    # Moves data in memory address.
+                if xop.bit(0):
                     self.mem[self.ds.b+dst] = src
-                else:
-                    # Moves data into register.
+                elif xop.bit(1):
+                    dst = getattr(self, self.var_map[dst])
                     dst.value = src
+                else:
+                    raise CPUException('Attempted to move data into immediate value.')
             elif op == 3: # IN operation/Standard I/O
                 v = self.mem.read16().b
                 port = self.mem.read16().b
@@ -876,65 +940,67 @@ class CPUCore(object):
                 else:
                     raise CPUException('Program attempted to change IP.')
             elif op == 12: # ADD operation/Adds two values
-                xop,dst,src = self.get_xop()
-                if xop not in [1,3,6,9,11]:
-                    raise CPUException('ADD, SUB, MUL, DIV operations expect the destination to be a register.')
-                # Register is destination
+                xop,dst,src = self.get_xop(1, 'ADD, SUB, MUL, DIV operations expect the destination to be a register.')
                 dst = getattr(self, self.var_map[dst])
                 dst.value += src
             elif op == 13: # SUB operation/Subtracts one value from another
-                xop,dst,src = self.get_xop()
-                if xop not in [1,3,6,9,11]:
-                    raise CPUException('ADD, SUB, MUL, DIV operations expect the destination to be a register.')
-                # Register is destination
+                xop,dst,src = self.get_xop(1, 'ADD, SUB, MUL, DIV operations expect the destination to be a register.')
                 dst = getattr(self, self.var_map[dst])
                 dst.value -= src
-            elif op == 14: # USE operation/Copies the memory address of the register into the register
-                v = self.mem.read().b
-                vn = self.var_map[v]
-                reg = getattr(self, vn)
-                reg.value = self.mem[reg.b]
-                if v > 0:
-                    getattr(self, vn).value = reg.b
+            elif op == 14: # TEST operation
+                xop,dst,src = self.get_xop()
+                if xop.bit(0):
+                    result = src & self.mem[self.ds.b+dst].b
+                elif xop.bit(1):
+                    result = src & getattr(self, self.var_map[dst]).b
                 else:
-                    raise CPUException('Program attempted to change IP.')
-            elif op == 15: # IF= operation/Jumps if CX == value
-                if self.cx.b == self.mem.read16().b:
-                    self.mem.ptr = self.dx.b+self.cs.b
-            elif op == 16: # IF! operation/Jumps if CX != value
-                if self.cx.b != self.mem.read16().b:
-                    self.mem.ptr = self.dx.b+self.cs.b
+                    result = src & dst
+                self.flags.bit(0, True if result == 0 else False)
+            elif op == 15: # JE operation
+                jmp = self.mem.read16().b
+                if self.flags.bit(0):
+                    self.mem.ptr = self.cs.b+jmp
+            elif op == 16: # JNE operation
+                jmp = self.mem.read16().b
+                if not self.flags.bit(0):
+                    self.mem.ptr = self.cs.b+jmp
             elif op == 17: # CMP operation/Compares two values
                 xop,dst,src = self.get_xop()
-                if xop in [1,3,9,11]:
-                    # Register is destination
-                    dst = getattr(self, self.var_map[dst])
-                elif xop in [5,7]:
-                    dst = getattr(self, self.var_map[dst]).b
-                if xop in [9,11]:
-                    # Compares memory address and register.
-                    result = src - dst.value
-                elif xop in [4,5,6,7]:
-                    # Compares data and memory address.
-                    result = src - self.mem[self.ds.b+dst]
+                if xop.bit(0):
+                    result = src - self.mem[self.ds.b+dst].b
+                elif xop.bit(1):
+                    result = src - getattr(self, self.var_map[dst]).b
                 else:
-                    # Compares data and register.
-                    result = src - dst.value
-                self.cx.value = result
+                    result = src - dst
+                self.flags.bit(0, True if result == 0 else False)
             elif op == 18: # MUL operation/Multiplies two values together
-                xop,dst,src = self.get_xop()
-                if xop not in [1,3,6,9,11]:
-                    raise CPUException('ADD, SUB, MUL, DIV operations expect the destination to be a register.')
-                # Register is destination
+                xop,dst,src = self.get_xop(1, 'ADD, SUB, MUL, DIV operations expect the destination to be a register.')
                 dst = getattr(self, self.var_map[dst])
                 dst.value *= src
             elif op == 19: # DIV operation/Divides two values
-                xop,dst,src = self.get_xop()
-                if xop not in [1,3,6,9,11]:
-                    raise CPUException('ADD, SUB, MUL, DIV operations expect the destination to be a register.')
-                # Register is destination
+                xop,dst,src = self.get_xop(1, 'ADD, SUB, MUL, DIV operations expect the destination to be a register.')
                 dst = getattr(self, self.var_map[dst])
                 dst.value /= src
+            elif op == 20: # PUSHF operation pushes FLAGS to stack
+                self.push_value(self.flags.b)
+            elif op == 21: # POPF operation pops FLAGS from the stack
+                self.flags.value = self.pop_value()
+            elif op == 22: # AND operation
+                xop,dst,src = self.get_xop(1, 'AND operation excepts the destination to be a register.')
+                dst = getattr(self, self.var_map[dst])
+                dst.value = dst.value & src
+            elif op == 23: # OR operation
+                xop,dst,src = self.get_xop(1, 'OR operation excepts the destination to be a register.')
+                dst = getattr(self, self.var_map[dst])
+                dst.value = dst.value | src
+            elif op == 24: # XOR operation
+                xop,dst,src = self.get_xop(1, 'XOR operation excepts the destination to be a register.')
+                dst = getattr(self, self.var_map[dst])
+                dst.value = dst.value ^ src
+            elif op == 25: # NOT operation
+                xop,dst,src = self.get_xop(1, 'NOT operation excepts the destination to be a register.')
+                dst = getattr(self, self.var_map[dst])
+                dst.value = dst.value & ~src
             self.ip.value = self.mem.ptr-self.cs.b
         if termios:
             attr[3] = oldattr
@@ -951,6 +1017,7 @@ class CPU(CPUCore):
     cpu_memory = 4096
     def __init__(self, filename=None, compressed=False):
         self.regs = CPURegisters()
+        self.flags = UInt8()
         self.mem = Memory(self.cpu_memory)
         self.cpu_hooks = {}
         if filename != None:
@@ -1009,7 +1076,7 @@ def main():
         options.cli = True
     else:
         c.loadbin(options.filename, options.cs)
-    c.loadbin(options.inttbl, 4000)
+    c.loadbin(options.inttbl, len(c.mem)-512)
     c.loadbin(options.intbin, options.intaddr)
     c.add_cpu_hook(ConIOHook)
     c.ds.value = options.ds
