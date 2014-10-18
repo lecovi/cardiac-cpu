@@ -14,24 +14,24 @@ the line of a modern CPU.
  - Fairly easy to read and understand code
  - Ability to use mark labels and variables in assembler code
  - New Memory mapping system being developed
-   - Will include the ability to use Memory mapped I/O
-   - Support for unique memory spaces with read/write protection
+    - Will include the ability to use Memory mapped I/O
+    - Support for unique memory spaces with read/write protection
 
 
 ##### Future plans
 
  - HTML5 Virtual machine to run the same bytecode in a web browser using JavaScript
-   - Will be-able to make sure of both Canvas and HTML forms
-   - Will be-able to make use of AJAX to GET and POST data
+    - Will be-able to make sure of both Canvas and HTML forms
+    - Will be-able to make use of AJAX to GET and POST data
  - Updated memory management system, currently in progress
-   - This will allow for the use of memory mapped I/O
+    - This will allow for the use of memory mapped I/O
  - The ability to create apps which can either use SDL or the current OS's native window widgets
-   - On Linux this will go through GTK2 or TK
-   - On MS-Windows this will go through native Win32 GUI APIs or TK
-   - In HTML5, this will use the Canvas and standard HTML widgets
+    - On Linux this will go through GTK2 or TK
+    - On MS-Windows this will go through native Win32 GUI APIs or TK
+    - In HTML5, this will use the Canvas and standard HTML widgets
  - Bytecode encryption, so that in order to run an app, you must enter in a passphrase
  - Add more opcodes and remove unneeded opcodes
  - Ability to easily package assets into virtual machine binary files
  - Add headers to Virtual Machine binary files
-   - Headers will enable use of runtime linking support so that binaries can be loaded at any address
-   - Will also enable dynamic asset loading
+    - Headers will enable use of runtime linking support so that binaries can be loaded at any address
+    - Will also enable dynamic asset loading
