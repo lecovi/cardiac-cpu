@@ -1,4 +1,4 @@
-import sys, zlib, mmap, struct
+import sys, zlib, mmap, struct, math
 try:
     import termios
 except ImportError:
@@ -11,6 +11,10 @@ class CPUException(Exception):
 
 class InvalidInterrupt(CPUException):
     """ This exception is raised if the user's code trying to access an I/O port on the CPU which has yet to be written/configured. """
+    pass
+
+class MemoryProtectionError(CPUException):
+    """ This exception is raised if the user's code attempts to read or write from protected memory it cannot access. """
     pass
 
 class Unit(object):
@@ -136,6 +140,139 @@ class UInt32(Unit):
     @msb.setter
     def msb(self, value):
         self._value|=(value<<16)
+
+class MemoryMap(object):
+    def __init__(self, size):
+        self.mem = mmap.mmap(-1, size)
+        self.size = size
+        self.__read = True
+        self.__write = True
+    def clear(self):
+        self.mem.seek(0)
+        self.mem.write('\x00' * self.size)
+        self.mem.seek(0)
+    def __len__(self):
+        return self.size
+    def __check_addr(self, addr):
+        if not isinstance(addr, int):
+            raise TypeError('Type %s is not valid here.' % type(addr))
+        if addr < 0 or addr > self.size-1:
+            raise IndexError
+    def mem_read(self, addr):
+        if not self.__read:
+            raise MemoryProtectionError('Attempted to read from protected memory space: %s' % addr)
+        self.__check_addr(addr)
+        return ord(self.mem[addr])
+    def mem_write(self, addr, byte):
+        if not self.__write:
+            raise MemoryProtectionError('Attempted to write to protected memory space: %s' % addr)
+        self.__check_addr(addr)
+        if isinstance(byte, int):
+            byte = chr(byte)
+        self.mem[addr] = byte
+    def readblock(self, addr, size):
+        self.mem.seek(addr)
+        return self.mem.read(size)
+    def writeblock(self, addr, block):
+        self.mem.seek(addr)
+        self.mem.write(block)
+    def clearblock(self, addr, size):
+        self.mem.seek(addr)
+        self.mem.write('\x00' * size)
+    def write_protect(self):
+        self.__write = False
+    def read_protect(self):
+        self.__read = False
+    @property
+    def writeable(self):
+        return self.__write
+    @property
+    def readable(self):
+        return self.__read
+    @property
+    def ptr(self):
+        return self.mem.tell()
+    @ptr.setter
+    def ptr(self, value):
+        self.mem.seek(value)
+
+class MemoryController(object):
+    """
+    This is the memory controller, which of all things controls access read/write accesses into mapped memory space.
+    """
+    def __init__(self, size=0xFFFF, even=True):
+        self.__map = {} #: This is the memory mapping hash.
+        self.__blksize = 0xE if even == True else 0xF
+        self.__size = size
+        self.__habit = int(math.log(size+1,2))-4
+        self.__bitmask = size>>3
+        self.__ptr = 0
+    @property
+    def ptr(self):
+        return self.__map[self.__ptr].ptr
+    @ptr.setter
+    def ptr(self, value):
+        self.__map[self.__ptr].ptr = value
+    def add_map(self, block, memory):
+        if not getattr(memory, 'mem_read', None):
+            raise
+        self.__map.update({block:memory})
+    @property
+    def memory_map(self):
+        mapping = {}
+        for block, memory in self.__map.items():
+            mapping.update({hex(block): [memory.readable, memory.writeable]})
+        return mapping
+    def __len__(self):
+        return 4096
+    def mem_read(self, addr):
+        ha = (addr>>self.__habit)&self.__blksize
+        try:
+            return self.__map[ha].mem_read(addr&self.__bitmask)
+        except:
+            raise
+    def mem_write(self, addr, byte):
+        ha = (addr>>self.__habit)&self.__blksize
+        try:
+            self.__map[ha].mem_write(addr&self.__bitmask, byte)
+        except:
+            raise
+    def __getitem__(self, addr):
+        return self.mem_read(addr)
+    def __setitem__(self, addr, byte):
+        self.mem_write(addr, byte)
+    def read16(self, addr):
+        return self[addr]|self[addr+1]<<8
+    def write16(self, addr, word):
+        self[addr] = word&0xFF
+        self[addr+1] = word>>8
+    def readblock(self, addr, size):
+        ha = (addr>>self.__habit)&self.__blksize
+        try:
+            return self.__map[ha].readblock(addr&self.__bitmask, size)
+        except:
+            raise
+    def writeblock(self, addr, block):
+        ha = (addr>>self.__habit)&self.__blksize
+        try:
+            self.__map[ha].writeblock(addr&self.__bitmask, block)
+        except:
+            raise
+    def memcopy(self, src, dest, size):
+        ha_src = (src>>self.__habit)&self.__blksize
+        ha_dst = (dest>>self.__habit)&self.__blksize
+        try:
+            buf = self.__map[ha_src].readblock(src&self.__bitmask, size)
+        except:
+            raise
+        try:
+            self.__map[ha_dst].writeblock(dest&self.__bitmask, buf)
+        except:
+            raise
+    def memmove(self, src, dest, size):
+        ha = (src>>self.__habit)&self.__blksize
+        self.memcopy(src, dest, size)
+        self.__map[ha].clearblock(dest&self.__bitmask, size)
 
 class Memory(object):
     """
@@ -296,7 +433,6 @@ class Storage(Memory):
     def resize(self, newsize):
         self.size = newsize
         self.mem.resize(newsize)
-
 
 class BaseCPUHook(object):
     """
@@ -635,7 +771,8 @@ class CPU(CPUCore):
     def __init__(self, filename=None, compressed=False):
         self.regs = CPURegisters()
         self.flags = UInt8()
-        self.mem = Memory(self.cpu_memory)
+        self.mem = MemoryController()
+        self.mem.add_map(0x0, MemoryMap(self.cpu_memory))
         self.cpu_hooks = {}
         if filename != None:
             self.loadbin(filename, compressed=compressed)
@@ -644,18 +781,13 @@ class CPU(CPUCore):
             bindata = open(filename, 'rb').read()
         else:
             bindata = zlib.decompress(open(filename, 'rb').read())
-        self.mem.push()
-        self.mem.ptr = dest
-        self.mem.write(bindata)
-        self.mem.pop()
+        self.mem.writeblock(dest, bindata)
+        self.mem.ptr = 0
     def savebin(self, filename, src, size, compress=False):
-        self.mem.push()
-        self.mem.ptr = src
         if not compress:
-            open(filename, 'wb').write(self.mem.mem.read(size))
+            open(filename, 'wb').write(self.mem.readblock(src, size))
         else:
-            open(filename, 'wb').write(zlib.compress(self.mem.mem.read(size)))
-        self.mem.pop()
+            open(filename, 'wb').write(zlib.compress(self.mem.readblock(src, size)))
 
 def main():
     from optparse import OptionParser

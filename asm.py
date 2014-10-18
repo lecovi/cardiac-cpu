@@ -45,7 +45,7 @@ class Coder(Cmd):
         'pushf': 20,
         'popf': 21,
     }
-    prompt = '0 '
+    prompt = '0x0 '
     @property
     def var_map(self):
         _var_map = getattr(self, '_var_map', None)
@@ -65,7 +65,7 @@ class Coder(Cmd):
     def emptyline(self):
         pass
     def postcmd(self, stop, line):
-        self.prompt = '%s ' % self.cpu.mem.ptr
+        self.prompt = '%s ' % hex(self.cpu.mem.ptr)
         return stop
     def get_label(self, lbl, reference=True):
         if lbl[0] == '*':
@@ -81,6 +81,8 @@ class Coder(Cmd):
             return ptr
         return lbl
     def get_int(self, arg):
+        if arg.startswith('h'):
+            return int(arg[1:], 16)
         try:
             return int(arg)
         except:
@@ -177,7 +179,7 @@ class Coder(Cmd):
         """ Sets or returns the current pointer location in memory. """
         if args != '':
             args = self.get_label(args, False)
-            self.cpu.mem.ptr = int(args)
+            self.cpu.mem.ptr = self.get_int(args)
         else:
             print self.cpu.mem.ptr
     def do_label(self, args):
@@ -290,10 +292,10 @@ class Coder(Cmd):
         except:
             self.stdout.write('Error loading source.\n')
     def do_memory(self, args):
-        """ Changes or views the current memory size. """
+        """ Changes or views the current memory map. """
         s = shlex.split(args)
         if len(s) != 1:
-            self.stdout.write('Current memory size: %s\n' % self.cpu.mem.size)
+            self.stdout.write('Current memory map: \n%s\n' % ', '.join(self.cpu.mem.memory_map.keys()))
             return False
         try:
             self.cpu.mem = Memory(int(s[0]))
