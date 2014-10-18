@@ -11,7 +11,7 @@ function appError(msg){
 }
 
 function MemoryMap(){
-  mem = new Array();
+  mem = new Uint8Array(0x2000);
   read = true;
   write = true;
   this.clear = function(){
@@ -26,7 +26,7 @@ function MemoryMap(){
   }
   this.mem_write = function(addr, byte){
     if (!write){ appError('Attempted to write to protected memory space: '+addr); }
-    if (isNaN(byte)){ mem[addr] = byte; }else{ mem[addr] = chr(byte); }
+    if (isNaN(byte)){ mem[addr] = ord(byte); }else{ mem[addr] = byte; }
   }
   this.write_protect = function(){ write = false; }
   this.read_protect = function(){ read = false; }
@@ -110,7 +110,7 @@ function CPU(binURL){
     var bf = new BinFileReader(binURL);
     for (var i=0;i<bf.getFileSize();i++){ mem.mem_write(i, bf.readNumber(1)); }
   }
-  function fetch(){ ++pc; return ord(mem.mem_read(pc-1)); }
+  function fetch(){ ++pc; return mem.mem_read(pc-1); }
   function read_string(){
     var result = '';
     var ch = 1;
