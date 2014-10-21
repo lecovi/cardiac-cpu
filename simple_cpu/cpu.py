@@ -1,21 +1,6 @@
 import sys, zlib, mmap, struct, math
-try:
-    import termios
-except ImportError:
-    print "termios not loaded, simulation will be limited."
-    termios = None
-
-class CPUException(Exception):
-    """ This exception is raised if there is a bytecode runtime error, usually caused by an error in the user's bytecode. """
-    pass
-
-class InvalidInterrupt(CPUException):
-    """ This exception is raised if the user's code trying to access an I/O port on the CPU which has yet to be written/configured. """
-    pass
-
-class MemoryProtectionError(CPUException):
-    """ This exception is raised if the user's code attempts to read or write from protected memory it cannot access. """
-    pass
+from simple_cpu.exceptions import MemoryProtectionError, CPUException
+from simple_cpu.devices import ConIOHook, HelloWorldHook
 
 class Unit(object):
     """
@@ -41,16 +26,16 @@ class Unit(object):
             raise TypeError
     def __add__(self, other):
         if isinstance(other, int):
-            return self.__class__(self._value + other)
+            return self._value + other
         elif isinstance(other, Unit):
-            return self.__class__(self._value + other.b)
+            return self._value + other.b
         else:
             raise NotImplemented
     def __sub__(self, other):
         if isinstance(other, int):
-            return self.__class__(self._value - other)
+            return self._value - other
         elif isinstance(other, Unit):
-            return self.__class__(self._value - other.b)
+            return self._value - other.b
         else:
             raise NotImplemented
     def __eq__(self, other):
@@ -96,50 +81,14 @@ class Unit(object):
 class UInt8(Unit):
     """ This is a Unit that only supports 8-bit integers. """
     fmt = 'B'
-    @property
-    def lsb(self):
-        return self._value&0xF
-    @lsb.setter
-    def lsb(self, value):
-        self._value|=value
-    @property
-    def msb(self):
-        return self._value>>4
-    @msb.setter
-    def msb(self, value):
-        self._value|=(value<<4)
 
 class UInt16(Unit):
     """ This is a Unit that only supports 16-bit integers. This Unit is mostly used with memory addresses. """
     fmt = 'H'
-    @property
-    def lsb(self):
-        return UInt8(self._value&0xFF)
-    @lsb.setter
-    def lsb(self, value):
-        self._value|value
-    @property
-    def msb(self):
-        return UInt8(self._value>>8)
-    @msb.setter
-    def msb(self, value):
-        self._value|=(value<<8)
 
 class UInt32(Unit):
     """ This is a Unit that only supports 32-bit integers. This is not used much in the code at all, as the VM isn't really 32-bit address enabled. """
     fmt = 'L'
-    @property
-    def lsb(self):
-        return UInt16(self._value&0xFFFF)
-    @lsb.setter
-    def lsb(self, value):
-        self._value|value
-    @property
-    def msb(self):
-        return UInt16(self._value>>16)
-    @msb.setter
-    def msb(self, value):
-        self._value|=(value<<16)
 
 class MemoryMap(object):
     def __init__(self, size):
@@ -147,6 +96,7 @@ class MemoryMap(object):
         self.size = size
         self.__read = True
         self.__write = True
+        self.__execute = True
     def clear(self):
         self.mem.seek(0)
         self.mem.write('\x00' * self.size)
@@ -158,18 +108,29 @@ class MemoryMap(object):
             raise TypeError('Type %s is not valid here.' % type(addr))
         if addr < 0 or addr > self.size-1:
             raise IndexError
-    def mem_read(self, addr):
+    def fetch(self):
+        if not self.__execute:
+            raise MemoryProtectionError('Attempted to execute code from protected memory space!')
+        return ord(self.mem.read(1))
+    def mem_read(self, addr=None):
         if not self.__read:
             raise MemoryProtectionError('Attempted to read from protected memory space: %s' % addr)
-        self.__check_addr(addr)
-        return ord(self.mem[addr])
-    def mem_write(self, addr, byte):
+        if addr is not None:
+            self.__check_addr(addr)
+            return ord(self.mem[addr])
+        return ord(self.mem.read(1))
+    def mem_write(self, addr, byte=None):
         if not self.__write:
             raise MemoryProtectionError('Attempted to write to protected memory space: %s' % addr)
-        self.__check_addr(addr)
-        if isinstance(byte, int):
-            byte = chr(byte)
-        self.mem[addr] = byte
+        if byte:
+            self.__check_addr(addr)
+            if isinstance(byte, int):
+                byte = chr(byte)
+            self.mem[addr] = byte
+        else:
+            if isinstance(addr, int):
+                addr = chr(addr)
+            self.mem.write(addr)
     def readblock(self, addr, size):
         self.mem.seek(addr)
         return self.mem.read(size)
@@ -196,23 +157,15 @@ class MemoryMap(object):
     def ptr(self, value):
         self.mem.seek(value)
 
-class MemoryController(object):
-    """
-    This is the memory controller, which of all things controls access read/write accesses into mapped memory space.
-    """
-    def __init__(self, size=0xFFFF, even=True):
+class IOMap(object):
+    """ This is the memory mapped I/O interface class, which controls access to I/O devices. """
+    readable = True
+    writeable = True
+    def __init__(self, size=0x2000):
         self.__map = {} #: This is the memory mapping hash.
-        self.__blksize = 0xE if even == True else 0xF
         self.__size = size
-        self.__habit = int(math.log(size+1,2))-4
-        self.__bitmask = size>>3
-        self.__ptr = 0
-    @property
-    def ptr(self):
-        return self.__map[self.__ptr].ptr
-    @ptr.setter
-    def ptr(self, value):
-        self.__map[self.__ptr].ptr = value
+        self.__habit = 8
+        self.__bitmask = 0x1ff
     def add_map(self, block, memory):
         if not getattr(memory, 'mem_read', None):
             raise
@@ -224,28 +177,95 @@ class MemoryController(object):
             mapping.update({hex(block): [memory.readable, memory.writeable]})
         return mapping
     def __len__(self):
-        return 4096
+        return self.size
     def mem_read(self, addr):
-        ha = (addr>>self.__habit)&self.__blksize
+        ha = (addr>>self.__habit)
         try:
             return self.__map[ha].mem_read(addr&self.__bitmask)
         except:
             raise
     def mem_write(self, addr, byte):
-        ha = (addr>>self.__habit)&self.__blksize
+        ha = (addr>>self.__habit)
         try:
             self.__map[ha].mem_write(addr&self.__bitmask, byte)
         except:
             raise
+    def readblock(self, addr, size):
+        raise MemoryProtectionError('Unsupported operation by I/O map.')
+    def writeblock(self, addr, block):
+        raise MemoryProtectionError('Unsupported operation by I/O map.')
+    def clearblock(self, addr, size):
+        raise MemoryProtectionError('Unsupported operation by I/O map.')
+
+class MemoryController(object):
+    """
+    This is the memory controller, which of all things controls access read/write accesses into mapped memory space.
+    """
+    def __init__(self, size=0xFFFF, even=True):
+        self.__map = {} #: This is the memory mapping hash.
+        self.__blksize = 0xE if even == True else 0xF
+        self.__size = size
+        self.__habit = int(math.log(size+1,2))-4
+        self.__bitmask = size>>3
+        self.__bank = 0x0
+    @property
+    def ptr(self):
+        return self.__map[self.__bank].ptr
+    @ptr.setter
+    def ptr(self, value):
+        self.__map[self.__bank].ptr = value
+    @property
+    def bank(self):
+        return self.__bank
+    @bank.setter
+    def bank(self, value):
+        self.__bank = value
+    def add_map(self, block, memory):
+        if not getattr(memory, 'mem_read', None):
+            raise
+        self.__map.update({block:memory})
+    @property
+    def memory_map(self):
+        mapping = {}
+        for block, memory in self.__map.items():
+            mapping.update({hex(block): [memory.readable, memory.writeable]})
+        return mapping
+    def __len__(self):
+        return self.__size
+    def fetch(self):
+        return self.__map[self.__bank].fetch()
+    def fetch16(self):
+        return self.__map[self.__bank].fetch()|self.__map[self.__bank].fetch()<<8
+    def read(self, addr):
+        ha = (addr>>self.__habit)&self.__blksize
+        try:
+            return self.__map[ha].mem_read(addr&self.__bitmask)
+        except:
+            raise
+    def write(self, addr, byte=None):
+        if byte is not None:
+            if isinstance(byte, Unit):
+                byte = byte.b
+            ha = (addr>>self.__habit)&self.__blksize
+            try:
+                self.__map[ha].mem_write(addr&self.__bitmask, byte)
+            except:
+                raise
+        else:
+            self.__map[self.__bank].mem_write(addr)
     def __getitem__(self, addr):
-        return self.mem_read(addr)
+        return self.read(addr)
     def __setitem__(self, addr, byte):
-        self.mem_write(addr, byte)
+        self.write(addr, byte)
     def read16(self, addr):
         return self[addr]|self[addr+1]<<8
-    def write16(self, addr, word):
-        self[addr] = word&0xFF
-        self[addr+1] = word>>8
+    def write16(self, addr, word=None):
+        if word:
+            self[addr] = word&0xFF
+            self[addr+1] = word>>8
+        else:
+            self.__map[self.__bank].mem_write(addr&0xFF)
+            self.__map[self.__bank].mem_write(addr>>8)
     def readblock(self, addr, size):
         ha = (addr>>self.__habit)&self.__blksize
         try:
@@ -274,231 +294,6 @@ class MemoryController(object):
         self.memcopy(src, dest, size)
         self.__map[ha].clearblock(dest&self.__bitmask, size)
 
-class Memory(object):
-    """
-    This class represents the CPU or Virtual Machine memory/address space.
-    It is a flat memory model with no concepts of blocks, the entire memory model is a single accessible block of continuous memory.
-    Very similar to the memory model of old 8-bit home computers, like the Apple family of computers.
-    """
-    def __init__(self, size):
-        self.mem = mmap.mmap(-1, size)
-        self.size = size
-        self._ptr_stack = []
-        self._ptr = 0
-        self.mem_hooks = {}
-    def clear(self):
-        self.mem.seek(0)
-        self.mem.write('\x00' * self.size)
-        self.mem.seek(0)
-        self._ptr_stack = []
-        self._ptr = 0
-    def __len__(self):
-        return self.size
-    def __check_key(self, key):
-        if not isinstance(key, int):
-            raise TypeError('Type %s is not valid here.' % type(key))
-        if key < 0 or key > self.size-1:
-            raise IndexError
-        self._ptr = self.ptr
-    def __check_hook(self, key):
-        for ranges in self.mem_hooks.keys():
-            a,b = ranges.split(':')
-            if key >= int(a) and key <= int(b):
-                return self.mem_hooks[ranges]
-        return None
-    def __getitem__(self, key):
-        if isinstance(key, slice):
-            stop = key.stop
-            key = key.start
-        else:
-            stop = key
-        self.__check_key(key)
-        self.mem.seek(key)
-        if stop > key:
-            if stop-key == 2:
-                value = UInt16(self.mem.read(2))
-            else:
-                value = self.mem.read(stop-key)
-        else:
-            value = UInt8(self.mem.read(1))
-        self.mem.seek(self._ptr)
-        return value
-    def __setitem__(self, key, value):
-        self.__check_key(key)
-        self.mem.seek(key)
-        if isinstance(value, Unit):
-            self.write(value.c)
-        elif isinstance(value, str):
-            self.write(value)
-        else:
-            self.write(UInt8(value).c)
-        self.mem.seek(self._ptr)
-    @property
-    def ptr(self):
-        return self.mem.tell()
-    @ptr.setter
-    def ptr(self, value):
-        if not isinstance(value, int):
-            raise TypeError
-        if value < 0 or value > self.size-1:
-            raise CPUException('Memory out of range.')
-        self.mem.seek(value)
-    def push(self):
-        self._ptr_stack.append(self.ptr)
-    def pop(self):
-        self.ptr = self._ptr_stack.pop()
-    def read(self, num=1):
-        if self.eom:
-            raise CPUException("Memory error: %d" % self.ptr)
-        if num == 1:
-            return UInt8(self.mem.read(1))
-        return self.mem.read(num)
-    def read16(self):
-        if self.eom:
-            raise CPUException("Memory error: %d" % self.ptr)
-        if self.size > 256:
-            return UInt16(self.mem.read(2))
-        return UInt8(self.mem.read(1))
-    def write(self, value):
-        hook = self.__check_hook(self.ptr)
-        if hook is not None:
-            if not hook.memset(self.ptr, value):
-                return
-        if isinstance(value, Unit):
-            self.mem.write(value.c)
-        elif isinstance(value, int):
-            if value < 256:
-                self.mem.write(chr(value))
-            elif value > 65535:
-                self.mem.write(UInt32(value).c)
-            else:
-                self.mem.write(UInt16(value).c)
-        elif isinstance(value, str):
-            self.mem.write(value)
-        else:
-            raise ValueError
-    def write16(self, value):
-        hook = self.__check_hook(self.ptr)
-        if hook is not None:
-            if not hook.memset(self.ptr, value):
-                return
-        if self.size > 256:
-            self.mem.write(UInt16(value).c)
-        else:
-            self.mem.write(chr(value))
-    def readstring(self, term='\x00'):
-        s = ''
-        while True:
-            if self.ptr > self.size-1: break
-            c = self.mem.read_byte()
-            if c == term: break
-            s += c
-        return s
-    @property
-    def eom(self):
-        return self.ptr > self.size-1
-    def memcopy(self, src, dest, size):
-        self.mem.move(dest, src, size)
-    def memclear(self, src, size):
-        self._ptr = self.ptr
-        self.mem.seek(src)
-        self.mem.write('\x00' * size)
-        self.mem.seek(self._ptr)
-
-class Storage(Memory):
-    """
-    This is a special sub-class of Memory which supports disk-backed memory storage.
-    The storage space is accessed using the exact same API as the memory space.
-    This makes both the Memory class and the Storage classes interchangable in code, which can enable persistent memory for your VM.
-    This Storage class also uses the OS level mmap, so multiple Virtual Machines can be running and accessing the same memory space.
-    """
-    def __init__(self, filename, size):
-        try:
-            self.file = open(filename, 'r+b')
-        except IOError:
-            self.file = open(filename, 'w+b')
-            self.file.write('\x00'*size)
-            self.file.close()
-            self.file = open(filename, 'r+b')
-        self.mem = mmap.mmap(self.file.fileno(), 0)
-        self.size = size
-        self.mem.resize(size)
-        self._ptr_stack = []
-        self._ptr = 0
-    def __del__(self):
-        print "Closing channels..."
-        self.mem.flush()
-        self.mem.close()
-        self.file.close()
-    def resize(self, newsize):
-        self.size = newsize
-        self.mem.resize(newsize)
-
-class BaseCPUHook(object):
-    """
-    This is the base class to extend the VM/CPU using virtual I/O ports.
-    """
-    def __init__(self, cpu):
-        if not isinstance(cpu, CPU):
-            raise TypeError
-        self.cpu = cpu
-    def get_handler(self, i, d):
-        try:
-            func = getattr(self, "%s_%d" % (d, i))
-        except AttributeError:
-            raise InvalidInterrupt("Port %d is not defined." % i)
-        return func
-    def input(self, i):
-        func = self.get_handler(i, 'in')
-        return func()
-    def output(self, i, v):
-        func = self.get_handler(i, 'out')
-        func(v)
-    def memset(self, addr, value):
-        pass
-    def cycle(self, port):
-        try:
-            func = self.get_handler(port, 'cycle')
-            func()
-        except InvalidInterrupt:
-            pass
-    def cleanup(self):
-        """ If this is overridden and does something in your own IO hook, then it is called when the CPU halts.  Great for closing files, pipes, etc... """
-        pass
-
-class HelloWorldHook(BaseCPUHook):
-    """ This is an example I/O Hook which demonstrates how the I/O hook system works. """
-    ports = [32,33]
-    memory_map = '100:120'
-    def out_32(self, addr):
-        self.addr = addr
-    def in_32(self):
-        self.cpu.mem[self.addr] = "Hello World!"
-        return self.addr
-    def out_33(self, reg):
-        sys.stdout.write("%s\n" % getattr(self.cpu, self.cpu.var_map[reg]).b)
-    def in_33(self):
-        return self.count
-    def cycle_33(self):
-        if not hasattr(self, 'count'):
-            self.count = 0
-        self.count += 1
-    def memset(self, addr, value):
-        self.count = ord(value)
-        return True
-
-class ConIOHook(BaseCPUHook):
-    """ This implements a basic tty-based display and keyboard for basic input/output operations from the CPU. """
-    ports = [8000, 4000]
-    def out_8000(self, reg):
-        sys.stdout.write('%s' % chr(reg))
-    def in_4000(self):
-        if termios:
-            sys.stdin.flush()
-            return ord(sys.stdin.read(1))
-        else:
-            raise CPUException("CPU: Single key input not supported on this platform.")
-
 class CPURegisters(object):
     """ This class contains all the CPU registers and manages them. """
     registers = ['ip','ax','bx','cx','dx','sp','bp','si','di','cs','ds','es','ss','cr']
@@ -507,7 +302,7 @@ class CPURegisters(object):
         for reg in self.registers:
             setattr(self, reg, UInt16())
 
-class CPUCore(object):
+class CPU(object):
     """
     This class is the core CPU/Virtual Machine class.  It has most of the runtime that should be platform independent.
     This class does not contain any code that can touch the host operating environment, so it cannot load or save data.
@@ -515,56 +310,63 @@ class CPUCore(object):
     you will need to subclass this and enable your specific environment's functionality.
     The other class below this CPU, should work on most operating systems to access standard disk and memory.
     """
+    def __init__(self):
+        self.regs = CPURegisters()
+        self.flags = UInt8()
+        self.mem = MemoryController()
+        self.iomap = IOMap()
+        self.mem.add_map(0x0, MemoryMap(0x2000))
+        self.mem.add_map(0xa, self.iomap)
+        self.cpu_hooks = {}
+        self.devices = []
+        self.__opcodes = {}
+        for name in dir(self.__class__):
+            if name[:7] == 'opcode_':
+                self.__opcodes.update({int(name[7:], 16):getattr(self, name)})
     @property
     def var_map(self):
         return self.regs.registers
-    @property
-    def cs(self):
-        return UInt16(self.regs.cs.value)
     def __getattr__(self, name):
         if name in self.regs.registers:
             return getattr(self.regs, name)
         raise AttributeError("%s isn't here." % name)
-    def add_cpu_hook(self, klass):
+    def add_device(self, klass):
         hook = klass(self)
+        self.devices.append(hook)
         for port in hook.ports:
             self.cpu_hooks.update({port: hook})
-        if hasattr(hook, 'memory_map'):
-            self.mem.mem_hooks.update({hook.memory_map: hook})
-    def hook_cleanup(self):
-        for hook in self.cpu_hooks:
-            self.cpu_hooks[hook].cleanup()
+        if hasattr(hook, 'io_address'):
+            self.iomap.add_map(hook.io_address, hook)
     def clear_registers(self, persistent=[]):
-        for reg in self.var_map:
+        for reg in self.regs.registers:
             if reg not in persistent:
                 getattr(self.regs, reg).value = 0
     def push_registers(self, regs=None):
         if regs is None:
             regs = self.regs.pushable
         for reg in regs:
-            self.mem[self.ss.b+self.sp.b] = getattr(self.regs, reg)
+            self.mem[self.ss+self.sp] = getattr(self.regs, reg)
             self.sp.value += 2
     def pop_registers(self, regs=None):
         if regs is None:
             regs = self.regs.pushable.reverse()
         for reg in regs:
             self.sp.value -= 2
-            src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
-            getattr(self.regs, reg).value = src
+            getattr(self.regs, reg).value = self.mem[self.ss+self.sp:self.ss+self.sp+2]
     def push_value(self, value):
         try:
             value = int(value)
-            self.mem[self.ss.b+self.sp.b] = UInt16(value)
+            self.mem[self.ss+self.sp] = value
             self.sp.value += 2
         except:
-            self.mem.ptr = self.ds.b
+            self.mem.ptr = self.ds
             self.mem.write(value+chr(0))
-            self.mem[self.ss.b+self.sp.b] = UInt16(0)
+            self.mem[self.ss+self.sp] = 0
             self.sp.value += 2
     def pop_value(self):
         if self.sp.value > 0:
             self.sp.value -= 2
-            return self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
+            return self.mem[self.ss+self.sp:self.ss+self.sp+2]
         raise CPUException('Stack out of range.')
     def get_xop(self, dst=None, errmsg='Internal value error.'):
         """ This handy function to translate the xop code and return a proper integer from the source. """
@@ -587,10 +389,95 @@ class CPUCore(object):
             # Memory address is the source.
             src = self.mem[self.ds.b+src].b
         return xop,dst,src
-    def hook_cycle(self):
-        for port in self.cpu_hooks:
-            self.cpu_hooks[port].cycle(port)
+    def get_value(self, resolve=True):
+        b = self.fetch()
+        typ = b>>4
+        b = b&0xf
+        if typ == 0:
+            value = getattr(self, self.var_map[b])
+        elif typ == 1:
+            value = b
+        elif typ in (2,4,5,):
+            value = b|self.fetch()<<4
+        elif typ == 3:
+            value = b|self.fetch16()<<4
+        if resolve:
+            if typ == 0:
+                value = value.b
+            elif typ == 4:
+                value = self.mem.read(value)
+            elif typ == 5:
+                value = self.mem.read16(value)
+        return typ, value
+    def device_command(self, cmd):
+        for device in self.devices:
+            handler = getattr(device, cmd, None)
+            if handler:
+                handler()
+    def start_devices(self):
+        self.device_command('start')
+    def stop_devices(self):
+        self.device_command('stop')
+    def device_cycle(self):
+        self.device_command('cycle')
+    def fetch(self):
+        return self.mem.fetch()
+    def fetch16(self):
+        return self.mem.fetch16()
+    def process(self):
+        """ Processes a single bytecode. """
+        self.mem.ptr = self.cs+self.ip
+        op = self.fetch()
+        if self.__opcodes.has_key(op):
+            if not self.__opcodes[op]():
+                self.ip.value = self.mem.ptr-self.cs.b
+        else:
+            raise CPUException('Invalid OpCode detected: %s' % op)
+    def opcode_0x0(self):
+        pass # NOP
+    def opcode_0x1(self):
+        i = self.fetch()
+        if i > 0:
+            self.ip.value = self.mem.ptr-self.cs
+            self.push_registers(['cs', 'ip'])
+            jmp = self.mem[i*2+self.int_table:i*2+self.int_table+2]
+            self.regs.cs.value = jmp
+            self.ip.value = 0
+        else:
+            self.pop_registers(['ip', 'cs'])
+        return True
+    def opcode_0x2(self):
+        src = self.get_value()[1]
+        typ, dst = self.get_value(False)
+        print src,typ,dst
+        if typ == 0:
+            dst.value = src
+        elif typ == 4:
+            self.mem[self.ds+dst] = src
+        elif typ == 5:
+            self.mem.write16(self.ds+dst, src)
+        else:
+            raise CPUException('Attempted to move data into immediate value.')
+    def opcode_0x3(self):
+        src = self.get_value()[1]
+        typ, v = self.get_value()
+        port = self.mem.read16().b
+        if self.cpu_hooks.has_key(port):
+            getattr(self, self.var_map[v]).value = self.cpu_hooks[port].input(port)
+    def opcode_0x5(self):
+        self.running = False
     def run(self, cs=0, persistent=[]):
+        self.clear_registers(persistent)
+        self.cs.value = cs
+        self.mem.ptr = 0
+        del persistent
+        del cs
+        self.running = True
+        while self.running:
+            if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
+            self.process()
+        return 0
+    def run_old(self, cs=0, persistent=[]):
         """
         This method is where all the magic happens, and where bytecode execution starts.
         You can optionally pass a custom code segment to start at, and what registers shouldn't be cleared before execution.
@@ -602,16 +489,10 @@ class CPUCore(object):
         int_table = len(self.mem)-512
         del persistent
         del cs
-        if termios:
-            attr = termios.tcgetattr(sys.stdin)
-            oldattr = attr[3]
-            attr[3] = attr[3] & ~termios.ICANON
-            termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
         while True:
             self.mem.ptr = self.cs.b+self.ip.b
             if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
-            if self.mem.eom: break
-            self.hook_cycle()
+            self.device_cycle()
             op = self.mem.read().b
             if 'stepping' in self.__dict__ and op > 0:
                 for reg in self.regs.registers:
@@ -755,27 +636,9 @@ class CPUCore(object):
                 dst = getattr(self, self.var_map[dst])
                 dst.value = dst.value & ~src
             self.ip.value = self.mem.ptr-self.cs.b
-        if termios:
-            attr[3] = oldattr
-            termios.tcsetattr(sys.stdin, termios.TCSANOW, attr)
-        self.hook_cleanup()
+        self.stop_devices()
         self.mem.offset = 0
         return exitcode
-
-class CPU(CPUCore):
-    """
-    This is the main class which most applications should use to access the CPU/Virtual Machine.
-    This class implements a 4k memory space with the ability to save and load binary data from disk.
-    """
-    cpu_memory = 4096
-    def __init__(self, filename=None, compressed=False):
-        self.regs = CPURegisters()
-        self.flags = UInt8()
-        self.mem = MemoryController()
-        self.mem.add_map(0x0, MemoryMap(self.cpu_memory))
-        self.cpu_hooks = {}
-        if filename != None:
-            self.loadbin(filename, compressed=compressed)
     def loadbin(self, filename, dest, compressed=False):
         if not compressed:
             bindata = open(filename, 'rb').read()
@@ -789,7 +652,7 @@ class CPU(CPUCore):
         else:
             open(filename, 'wb').write(zlib.compress(self.mem.readblock(src, size)))
 
-def main():
+def main_old():
     from optparse import OptionParser
     parser = OptionParser()
     parser.add_option('-f', '--filename', dest='filename', help='The binary file to execute in the virtual machine')
@@ -810,7 +673,7 @@ def main():
         c.loadbin(options.filename, options.cs)
     c.loadbin(options.inttbl, len(c.mem)-512)
     c.loadbin(options.intbin, options.intaddr)
-    c.add_cpu_hook(ConIOHook)
+    c.add_device(ConIOHook)
     c.ds.value = options.ds
     c.ss.value = options.ss
     if options.integer:
@@ -825,6 +688,21 @@ def main():
         c.run(options.cs, ['ds', 'ss', 'sp'])
     except CPUException, e:
         print e
+
+def main():
+    from optparse import OptionParser
+    parser = OptionParser()
+    options, args = parser.parse_args()
+    if len(args) == 0:
+        sys.stderr.write('Invalid amount of arguments!\n')
+        sys.exit(1)
+    c = CPU()
+    c.add_device(HelloWorldHook)
+    c.loadbin(args[0], 0x0)
+    try:
+        c.run()
+    except CPUException, e:
+        sys.stderr.write('%s\n' % e)
 
 if __name__ == '__main__':
     main()

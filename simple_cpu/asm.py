@@ -1,6 +1,7 @@
 from cmd import Cmd
-from cpu import CPU, UInt8, CPUException, UInt16, Memory, ConIOHook
+from cpu import CPU, UInt8, CPUException, UInt16
 import shlex, readline, os, sys
+from simple_cpu.devices import ConIOHook, HelloWorldHook
 
 class Coder(Cmd):
     """
@@ -19,7 +20,7 @@ class Coder(Cmd):
         'je': 15,
         'jne': 16,
     }
-    bc_map = {
+    bcX_map = {
         'int': [1,0],
         'ret': [1,0],
         'hlt': [5,0],
@@ -45,7 +46,42 @@ class Coder(Cmd):
         'pushf': 20,
         'popf': 21,
     }
+    bc_map = {
+        'int':  0x1,
+        'ret':  0x1,
+        'mov':  0x2,
+        'in':   0x3,
+        'out':  0x4,
+        'hlt':  0x5,
+        'jmp':  0x6,
+        'push': 0x7,
+        'pop':  0x8,
+        'call': 0x9,
+        'inc':  0xa,
+        'dec':  0xb,
+        'add':  0xc,
+        'sub':  0xd,
+        'test': 0xe,
+        'je':   0xf,
+        'jne':  0x10,
+        'cmp':  0x11,
+        'mul':  0x12,
+        'div':  0x13,
+        'pushf':0x14,
+        'popf': 0x15,
+        'and':  0x16,
+        'or':   0x17,
+        'xor':  0x18,
+        'not':  0x19,
+    }
+    mov_map = {
+        'ax':   0xa0,
+        'bx':   0xa1,
+        'cx':   0xa2,
+        'dx':   0xa3,
+    }
     prompt = '0x0 '
+    intro = 'Simple CPU Assembler v0.5'
     @property
     def var_map(self):
         _var_map = getattr(self, '_var_map', None)
@@ -54,6 +90,12 @@ class Coder(Cmd):
             _var_map = dict([(reg,regs.index(reg)) for reg in regs])
             self._var_map = _var_map
         return _var_map
+    @property
+    def ptr(self):
+        return self.cpu.ip.b
+    @ptr.setter
+    def ptr(self, value):
+        self.cpu.ip.value = value
     def configure(self, cpu):
         if not isinstance(cpu, CPU):
             raise TypeError
@@ -65,18 +107,24 @@ class Coder(Cmd):
     def emptyline(self):
         pass
     def postcmd(self, stop, line):
-        self.prompt = '%s ' % hex(self.cpu.mem.ptr)
+        self.ptr = self.cpu.mem.ptr
+        self.prompt = '%s ' % hex(self.ptr)
         return stop
+    def onecmd(self, line):
+        try:
+            return Cmd.onecmd(self, line)
+        except CPUException, e:
+            self.stdout.write('CPUException: %s\n' % e)
     def get_label(self, lbl, reference=True):
         if lbl[0] == '*':
             label = lbl[1:]
             if reference == False:
                 return self.labels[lbl[1:]][0]
             elif label in self.labels:
-                self.labels[label][1].append(self.cpu.mem.ptr)
+                self.labels[label][1].append(self.ptr)
                 ptr = self.labels[lbl[1:]][0]
             else:
-                self.labels[label] = [0,[self.cpu.mem.ptr]]
+                self.labels[label] = [0,[self.ptr]]
                 ptr = 0
             return ptr
         return lbl
@@ -91,22 +139,78 @@ class Coder(Cmd):
             return self.var_map[arg]
         except:
             return 0
+    def write_type(self, typ, value):
+        b = value&0xf
+        self.cpu.mem.write(b|typ<<4)
+        if value < 4096:
+            self.cpu.mem.write(value>>4)
+        else:
+            self.cpu.mem.write16(value>>4)
+    def write_value(self, value):
+        if value in self.var_map:
+            self.cpu.mem.write(self.var_map[value])
+        elif value.startswith('&'):
+            value = int(value[1:], 16)
+            if value < 4096:
+                self.write_type(4, value)
+            elif value < 1048576:
+                self.write_type(5, value)
+        else:
+            value = self.get_int(value)
+            if value < 16:
+                self.cpu.mem.write(value)
+            elif value < 4096:
+                self.write_type(2, value)
+            elif value < 1048576:
+                self.write_type(3, value)
     def default(self, line):
+        if line.startswith('#'):
+            return False
         if line == '.':
             return True
         s = shlex.split(line)
         op, arg = s[0], ''
         if len(s) > 1:
             try:
-                ptr = int(s[0])
-                self.cpu.mem.ptr = ptr
+                ptr = int(s[0], 16)
+                self.ptr = ptr
                 op = s[1]
             except:
                 arg = s[1]
         if len(s) in [3,4]:
             try:
-                ptr, op, arg = int(s[0]), s[1], s[2]
-                self.cpu.mem.ptr = ptr
+                ptr, op, arg = int(s[0], 16), s[1], s[2]
+                self.ptr = ptr
+            except:
+                pass
+        print self.bc_map[op]
+        self.cpu.mem.write(self.bc_map[op])
+        try:
+            a1,a2 = arg.split(',')
+        except:
+            if arg != '':
+                self.write_value(arg)
+            return
+        self.write_value(a2)
+        self.write_value(a1)
+    def default_old(self, line):
+        if line.startswith('#'):
+            return False
+        if line == '.':
+            return True
+        s = shlex.split(line)
+        op, arg = s[0], ''
+        if len(s) > 1:
+            try:
+                ptr = int(s[0], 16)
+                self.ptr = ptr
+                op = s[1]
+            except:
+                arg = s[1]
+        if len(s) in [3,4]:
+            try:
+                ptr, op, arg = int(s[0], 16), s[1], s[2]
+                self.ptr = ptr
             except:
                 pass
         if op in self.bc0_map:
@@ -141,10 +245,10 @@ class Coder(Cmd):
             xop = UInt8()
             if a1.startswith('&'):
                 xop.bit(0, True)
-                a1 = a1[1:]
+                a1 = self.get_int(a1[1:])
             if a2.startswith('&'):
                 xop.bit(2, True)
-                a2 = a2[1:]
+                a2 = self.get_int(a2[1:])
             if a1 in self.var_map:
                 xop.bit(1, True)
                 a1 = self.var_map[a1]
@@ -154,22 +258,22 @@ class Coder(Cmd):
             self.cpu.mem.write(xop)
             if isinstance(a1, str):
                 a1 = self.get_label(a1)
-                self.cpu.mem.write16(int(a1))
+                self.cpu.mem.write16(a1)
             else:
-                self.cpu.mem.write(int(a1))
+                self.cpu.mem.write(self.get_int(a1))
             if isinstance(a2, str):
                 a2 = self.get_label(a2)
                 self.cpu.mem.write16(int(a2))
             else:
-                self.cpu.mem.write(int(a2))
+                self.cpu.mem.write(self.get_int(a2))
         else:
             self.unknown_command(line)
     def do_boot(self, args):
         """ Executes the code currently in memory at an optional memory pointer location. """
         if args != '':
-            ptr = int(args)
+            ptr = int(args, 16)
         else:
-            ptr = self.cpu.mem.ptr
+            ptr = self.ptr
         try:
             rt = self.cpu.run(ptr, ['ds', 'ss'])
             self.stdout.write('Exit Code: %s\n' % rt)
@@ -181,7 +285,7 @@ class Coder(Cmd):
             args = self.get_label(args, False)
             self.cpu.mem.ptr = self.get_int(args)
         else:
-            print self.cpu.mem.ptr
+            print self.ptr
     def do_label(self, args):
         """ Sets or prints a list of pointer variables. """
         if args != '':
@@ -220,26 +324,7 @@ class Coder(Cmd):
         if args != '':
             self.cseg = int(args)
         else:
-            self.cseg = self.cpu.mem.ptr
-    def do_dump(self, args):
-        """ Dumps the byte at the current memory location. """
-        if args != '':
-            ptr = int(args)
-        else:
-            ptr = self.cpu.mem.ptr
-        byte = self.cpu.mem[ptr]
-        self.stdout.write("%s" % byte.b)
-        if byte.b > 64:
-            self.stdout.write(' / %s' % byte.c)
-        self.stdout.write('\n')
-    def do_dump16(self, args):
-        """ Dumps a 16-bit integer from the current memory location. """
-        if args != '':
-            optr = self.cpu.mem.ptr
-            self.cpu.mem.ptr = int(args)
-        self.stdout.write("%s\n" % self.cpu.mem.read16().b)
-        if args != '':
-            self.cpu.mem.ptr = optr
+            self.cseg = self.ptr
     def do_savebin(self, args):
         """ Saves the current binary image in memory to disc. """
         s = shlex.split(args)
@@ -266,16 +351,81 @@ class Coder(Cmd):
             for c in data:
                 self.cpu.mem.write(ord(c))
             self.cpu.mem.write(0)
-    def do_set(self, args):
-        """ Stores a raw byte at the current memory location. """
+    def do_poke(self, args):
+        """ Stores a raw byte at a specific memory location. """
         if args != '':
-            self.cpu.mem.write(int(args))
+            try:
+                addr,value = args.split(',')
+            except ValueError:
+                addr,value = hex(self.ptr), args
+            self.cpu.mem.write(int(addr,16), self.get_int(value))
+    def do_doke(self, args):
+        """ Stores a raw 16-bit integer at a specific memory location. """
+        if args != '':
+            try:
+                addr,value = args.split(',')
+            except ValueError:
+                addr = hex(self.ptr)
+            self.cpu.mem.write16(int(addr,16), self.get_int(value))            
+    def do_peek(self, args):
+        if args != '':
+            value = self.cpu.mem.read(int(args,16))
+        else:
+            value = self.cpu.mem.read(self.ptr)
+        if value > 64:
+            self.stdout.write('%s / ' % chr(value))
+        self.stdout.write('%s (%s)\n' % (hex(value), value))
+    def do_deek(self, args):
+        if args != '':
+            value = self.cpu.mem.read16(int(args,16))
+        else:
+            value = self.cpu.mem.read16(self.ptr)
+        if value > 64 and value < 129:
+            self.stdout.write('%s / ' % chr(value))
+        self.stdout.write('%s (%s)\n' % (hex(value), value))
+    def do_hexdump(self, args):
+        if args != '':
+            try:
+                start,stop = args.split(':')
+                start,stop = int(start,16),int(stop,16)
+            except ValueError:
+                start = int(args,16)
+                stop = start+16
+        else:
+            start,stop = self.ptr,self.ptr+16
+        ptr = start
+        while ptr<stop-1:
+            self.stdout.write('%s: ' % hex(ptr))
+            for i in range(0,16):
+                try:
+                    self.stdout.write('%s  ' % hex(self.cpu.mem.read(ptr)))
+                except:
+                    self.stdout.write('0x0  ')
+                ptr+=1
+            self.stdout.write('\n')
+    def do_hex(self, args):
+        """ Convert a decimal number to a hex. """
+        if args != '':
+            self.stdout.write('%s\n' % hex(int(args)))
+    def do_dec(self, args):
+        """ Convert a hexidecimal number to decimal. """
+        if args != '':
+            self.stdout.write('%s\n' % int(args, 16))
+    def do_ord(self, args):
+        """ Gives the ordinal of a character. """
+        if args != '':
+            self.stdout.write('%s\n' % ord(args))
+    def do_chr(self, args):
+        """ Gives the ASCII character of a given ordinal. """
+        if args != '':
+            value = int(args)
+            self.stdout.write('%s (%s)\n' % (hex(value), chr(value)))
     def do_bp(self, args):
         """ Sets a breakpoint at the current memory location. """
         if args != '':
             self.cpu.bp = int(args)
         else:
-            self.cpu.bp = self.cpu.mem.ptr
+            self.cpu.bp = self.ptr
     def do_cbp(self, args):
         """ Clears a currently set breakpoint. """
         del self.cpu.bp
@@ -297,10 +447,6 @@ class Coder(Cmd):
         if len(s) != 1:
             self.stdout.write('Current memory map: \n%s\n' % ', '.join(self.cpu.mem.memory_map.keys()))
             return False
-        try:
-            self.cpu.mem = Memory(int(s[0]))
-        except:
-            self.stdout.write('Please specify a size in bytes.\n')
     def do_registers(self, args):
         """ Prints the current state of the CPU registers. """
         reglist = []
@@ -387,7 +533,7 @@ class Coder(Cmd):
             readline.write_history_file(s[0])
             os.chmod(s[0], 33188)
 
-def main():
+def main_old():
     from optparse import OptionParser
     parser = OptionParser()
     parser.add_option('--source', dest='source', help='Compile source code file into a binary image')
@@ -402,7 +548,7 @@ def main():
     c = CPU()
     c.loadbin(options.inttbl, len(c.mem)-512)
     c.loadbin(options.intbin, options.intaddr)
-    c.add_cpu_hook(ConIOHook)
+    c.add_cpu_hook(HelloWorldHook)
     c.ds.value = options.ds
     c.ss.value = options.ss
     if options.source:
@@ -424,6 +570,19 @@ def main():
         cli = Coder()
         cli.configure(c)
         cli.cmdloop()
+
+def main():
+    c = CPU()
+    c.add_device(HelloWorldHook)
+    cli = Coder()
+    cli.configure(c)
+    c.start_devices()
+    try:
+        cli.cmdloop()
+    except CPUException, e:
+        sys.stderr.write('%s\n' % e)
+    finally:
+        c.stop_devices()
 
 if __name__ == '__main__':
     main()
