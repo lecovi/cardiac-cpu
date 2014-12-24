@@ -158,7 +158,7 @@ class Coder(Cmd):
         else:
             value = self.get_int(value)
             if value < 16:
-                self.cpu.mem.write(value)
+                self.write_type(1, value)
             elif value < 4096:
                 self.write_type(2, value)
             elif value < 1048576:
@@ -368,6 +368,7 @@ class Coder(Cmd):
                 addr = hex(self.ptr)
             self.cpu.mem.write16(int(addr,16), self.get_int(value))            
     def do_peek(self, args):
+        """ Shows a 8-bit integer from a specific memory location. """
         if args != '':
             value = self.cpu.mem.read(int(args,16))
         else:
@@ -376,6 +377,7 @@ class Coder(Cmd):
             self.stdout.write('%s / ' % chr(value))
         self.stdout.write('%s (%s)\n' % (hex(value), value))
     def do_deek(self, args):
+        """ Shows a 16-bit integer from a specific memory location. """
         if args != '':
             value = self.cpu.mem.read16(int(args,16))
         else:
@@ -383,6 +385,9 @@ class Coder(Cmd):
         if value > 64 and value < 129:
             self.stdout.write('%s / ' % chr(value))
         self.stdout.write('%s (%s)\n' % (hex(value), value))
+    def do_value(self, args):
+        if args == '':
+            print self.cpu.get_value()
     def do_hexdump(self, args):
         if args != '':
             try:
@@ -573,6 +578,7 @@ def main_old():
 
 def main():
     c = CPU()
+    c.add_device(ConIOHook)
     c.add_device(HelloWorldHook)
     cli = Coder()
     cli.configure(c)

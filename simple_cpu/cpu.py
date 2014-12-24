@@ -389,6 +389,14 @@ class CPU(object):
             # Memory address is the source.
             src = self.mem[self.ds.b+src].b
         return xop,dst,src
+    def resolve(self, typ, value):
+        if typ == 0:
+            value = value.b
+        elif typ == 4:
+            value = self.mem.read(value)
+        elif typ == 5:
+            value = self.mem.read16(value)
+        return value
     def get_value(self, resolve=True):
         b = self.fetch()
         typ = b>>4
@@ -397,18 +405,26 @@ class CPU(object):
             value = getattr(self, self.var_map[b])
         elif typ == 1:
             value = b
-        elif typ in (2,4,5,):
+        elif typ in (2,4,):
             value = b|self.fetch()<<4
-        elif typ == 3:
+        elif typ in (3,5,):
             value = b|self.fetch16()<<4
         if resolve:
-            if typ == 0:
-                value = value.b
-            elif typ == 4:
-                value = self.mem.read(value)
-            elif typ == 5:
-                value = self.mem.read16(value)
+            return typ, self.resolve(typ, value)
         return typ, value
+    def set_value(self, dst, src, valid=None):
+        if valid is not None and dst[0] not in valid:
+            raise CPUException('Attempted to place data in invalid location for specific operation.')
+        typ, dst = dst
+        if typ == 1:
+            dst.value = src
+        elif typ in (4,5,):
+            if src < 256:
+                self.mem[self.ds+dst] = src
+            else:
+                self.mem.write16(self.ds+dst, src)
+        else:
+            raise CPUException('Attempted to move data into immediate value.')
     def device_command(self, cmd):
         for device in self.devices:
             handler = getattr(device, cmd, None)
@@ -427,6 +443,9 @@ class CPU(object):
     def process(self):
         """ Processes a single bytecode. """
         self.mem.ptr = self.cs+self.ip
+        print self.mem.ptr
+        if self.mem.ptr > 50:
+            raise
         op = self.fetch()
         if self.__opcodes.has_key(op):
             if not self.__opcodes[op]():
@@ -436,6 +455,7 @@ class CPU(object):
     def opcode_0x0(self):
         pass # NOP
     def opcode_0x1(self):
+        """ INT/RET """
         i = self.fetch()
         if i > 0:
             self.ip.value = self.mem.ptr-self.cs
@@ -447,25 +467,83 @@ class CPU(object):
             self.pop_registers(['ip', 'cs'])
         return True
     def opcode_0x2(self):
+        """ MOV """
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        print src,dst[0],dst
+        self.set_value(dst, src)
+    def opcode_0x3(self):
+        """ IN """
         src = self.get_value()[1]
         typ, dst = self.get_value(False)
-        print src,typ,dst
-        if typ == 0:
-            dst.value = src
-        elif typ == 4:
-            self.mem[self.ds+dst] = src
-        elif typ == 5:
-            self.mem.write16(self.ds+dst, src)
-        else:
-            raise CPUException('Attempted to move data into immediate value.')
-    def opcode_0x3(self):
-        src = self.get_value()[1]
-        typ, v = self.get_value()
-        port = self.mem.read16().b
-        if self.cpu_hooks.has_key(port):
-            getattr(self, self.var_map[v]).value = self.cpu_hooks[port].input(port)
+        if self.cpu_hooks.has_key(src):
+            dst.value = self.cpu_hooks[src].input(src)
+    def opcode_0x4(self):
+        """ OUT """
+        pass
     def opcode_0x5(self):
+        """ HLT """
         self.running = False
+    def opcode_0x6(self):
+        """ JMP """
+        pass
+    def opcode_0x7(self):
+        """ PUSH """
+        pass
+    def opcode_0x8(self):
+        """ POP """
+        pass
+    def opcode_0x9(self):
+        """ CALL """
+        pass
+    def opcode_0xa(self):
+        """ INC """
+        pass
+    def opcode_0xb(self):
+        """ DEC """
+        pass
+    def opcode_0xc(self):
+        """ ADD """
+        pass
+    def opcode_0xd(self):
+        """ SUB """
+        pass
+    def opcode_0xe(self):
+        """ TEST """
+        pass
+    def opcode_0xf(self):
+        """ JE """
+        pass
+    def opcode_0x10(self):
+        """ JNE """
+        pass
+    def opcode_0x11(self):
+        """ CMP """
+        pass
+    def opcode_0x12(self):
+        """ MUL """
+        pass
+    def opcode_0x13(self):
+        """ DIV """
+        pass
+    def opcode_0x14(self):
+        """ PUSHF """
+        pass
+    def opcode_0x15(self):
+        """ POPF """
+        pass
+    def opcode_0x16(self):
+        """ AND """
+        pass
+    def opcode_0x17(self):
+        """ OR """
+        pass
+    def opcode_0x18(self):
+        """ XOR """
+        pass
+    def opcode_0x19(self):
+        """ NOT """
+        pass
     def run(self, cs=0, persistent=[]):
         self.clear_registers(persistent)
         self.cs.value = cs
