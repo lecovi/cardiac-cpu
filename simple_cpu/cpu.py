@@ -593,175 +593,16 @@ class CPU(object):
         self.clear_registers(persistent)
         self.cs.value = cs
         self.mem.ptr = 0
+        self.int_table = len(self.mem)-512
         del persistent
         del cs
         self.running = True
         while self.running:
             if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
-            self.process()
-        return 0
-    def run_old(self, cs=0, persistent=[]):
-        """
-        This method is where all the magic happens, and where bytecode execution starts.
-        You can optionally pass a custom code segment to start at, and what registers shouldn't be cleared before execution.
-        """
-        self.clear_registers(persistent)
-        self.regs.cs.value = cs
-        self.mem.ptr = 0
-        exitcode = 0
-        int_table = len(self.mem)-512
-        del persistent
-        del cs
-        while True:
-            self.mem.ptr = self.cs.b+self.ip.b
-            if 'bp' in self.__dict__ and self.bp == self.mem.ptr: break
             self.device_cycle()
-            op = self.mem.read().b
-            if 'stepping' in self.__dict__ and op > 0:
-                for reg in self.regs.registers:
-                    sys.stdout.write('%s=%s\t' % (reg.upper(), getattr(self.regs, reg).b))
-                sys.stdout.write('\n')
-            if op == 1:
-                i = self.mem.read().b
-                if i > 0: # INT operation/Software interrupt
-                    self.ip.value = self.mem.ptr-self.cs.b
-                    self.push_registers(['cs','ip'])
-                    jmp = self.mem[i*2+int_table:i*2+int_table+2].b
-                    self.regs.cs.value = jmp
-                    self.ip.value = 0
-                else: # RET operation/Return from an INT or CALL.
-                    self.pop_registers(['ip','cs'])
-                continue
-            elif op == 2: # MOV operation/Memory moving
-                xop,dst,src = self.get_xop()
-                if xop.bit(0):
-                    self.mem[self.ds.b+dst] = src
-                elif xop.bit(1):
-                    dst = getattr(self, self.var_map[dst])
-                    dst.value = src
-                else:
-                    raise CPUException('Attempted to move data into immediate value.')
-            elif op == 3: # IN operation/Standard I/O
-                v = self.mem.read16().b
-                port = self.mem.read16().b
-                if self.cpu_hooks.has_key(port):
-                    getattr(self, self.var_map[v]).value = self.cpu_hooks[port].input(port)
-            elif op == 4: # OUT operation/Standard I/O
-                port = self.mem.read16().b
-                v = self.mem.read16().b
-                if self.cpu_hooks.has_key(port):
-                    self.cpu_hooks[port].output(port, getattr(self, self.var_map[v]).b)
-            elif op == 5: # HLT operation/Halts the CPU
-                exitcode = self.mem.read().b
-                break
-            elif op == 6: # JMP operation
-                jmp = self.mem.read16()
-                self.mem.ptr = jmp.b+self.cs.b
-            elif op == 7: # PUSH operation/Pushes a register onto the stack
-                v = self.mem.read().b
-                if v > 0:
-                    src = getattr(self, self.var_map[v])
-                    self.mem[self.ss.b+self.sp.b] = src
-                    self.sp.value += 2
-                else:
-                    self.push_registers()
-            elif op == 8: # POP operation/Pops a register off the stack
-                v = self.mem.read().b
-                if v > 0:
-                    self.sp.value -= 2
-                    src = self.mem[self.ss.b+self.sp.b:self.ss.b+self.sp.b+2].b
-                    getattr(self, self.var_map[v]).value = src
-                else:
-                    self.pop_registers()
-            elif op == 9: # CALL operation/Jumps to an address after pushing the code segment and instruction pointer onto the stack
-                jmp = self.mem.read16()
-                self.ip.value = self.mem.ptr-self.cs.b
-                self.push_registers(['cs','ip'])
-                self.mem.ptr = jmp.b+self.cs.b
-            elif op == 10: # INC operation/Increments a register by one
-                v = self.mem.read().b
-                vn = self.var_map[v]
-                reg = getattr(self, vn).b
-                reg += 1
-                if v > 0:
-                    getattr(self, vn).value = reg
-                else:
-                    raise CPUException('Program attempted to change IP.')
-            elif op == 11: # DEC operation/Decreases a register by one
-                v = self.mem.read().b
-                vn = self.var_map[v]
-                reg = getattr(self, vn).b
-                reg -= 1
-                if v > 0:
-                    getattr(self, vn).value = reg
-                else:
-                    raise CPUException('Program attempted to change IP.')
-            elif op == 12: # ADD operation/Adds two values
-                xop,dst,src = self.get_xop(1, 'ADD, SUB, MUL, DIV operations expect the destination to be a register.')
-                dst = getattr(self, self.var_map[dst])
-                dst.value += src
-            elif op == 13: # SUB operation/Subtracts one value from another
-                xop,dst,src = self.get_xop(1, 'ADD, SUB, MUL, DIV operations expect the destination to be a register.')
-                dst = getattr(self, self.var_map[dst])
-                dst.value -= src
-            elif op == 14: # TEST operation
-                xop,dst,src = self.get_xop()
-                if xop.bit(0):
-                    result = src & self.mem[self.ds.b+dst].b
-                elif xop.bit(1):
-                    result = src & getattr(self, self.var_map[dst]).b
-                else:
-                    result = src & dst
-                self.flags.bit(0, True if result == 0 else False)
-            elif op == 15: # JE operation
-                jmp = self.mem.read16().b
-                if self.flags.bit(0):
-                    self.mem.ptr = self.cs.b+jmp
-            elif op == 16: # JNE operation
-                jmp = self.mem.read16().b
-                if not self.flags.bit(0):
-                    self.mem.ptr = self.cs.b+jmp
-            elif op == 17: # CMP operation/Compares two values
-                xop,dst,src = self.get_xop()
-                if xop.bit(0):
-                    result = src - self.mem[self.ds.b+dst].b
-                elif xop.bit(1):
-                    result = src - getattr(self, self.var_map[dst]).b
-                else:
-                    result = src - dst
-                self.flags.bit(0, True if result == 0 else False)
-            elif op == 18: # MUL operation/Multiplies two values together
-                xop,dst,src = self.get_xop(1, 'ADD, SUB, MUL, DIV operations expect the destination to be a register.')
-                dst = getattr(self, self.var_map[dst])
-                dst.value *= src
-            elif op == 19: # DIV operation/Divides two values
-                xop,dst,src = self.get_xop(1, 'ADD, SUB, MUL, DIV operations expect the destination to be a register.')
-                dst = getattr(self, self.var_map[dst])
-                dst.value /= src
-            elif op == 20: # PUSHF operation pushes FLAGS to stack
-                self.push_value(self.flags.b)
-            elif op == 21: # POPF operation pops FLAGS from the stack
-                self.flags.value = self.pop_value()
-            elif op == 22: # AND operation
-                xop,dst,src = self.get_xop(1, 'AND operation excepts the destination to be a register.')
-                dst = getattr(self, self.var_map[dst])
-                dst.value = dst.value & src
-            elif op == 23: # OR operation
-                xop,dst,src = self.get_xop(1, 'OR operation excepts the destination to be a register.')
-                dst = getattr(self, self.var_map[dst])
-                dst.value = dst.value | src
-            elif op == 24: # XOR operation
-                xop,dst,src = self.get_xop(1, 'XOR operation excepts the destination to be a register.')
-                dst = getattr(self, self.var_map[dst])
-                dst.value = dst.value ^ src
-            elif op == 25: # NOT operation
-                xop,dst,src = self.get_xop(1, 'NOT operation excepts the destination to be a register.')
-                dst = getattr(self, self.var_map[dst])
-                dst.value = dst.value & ~src
-            self.ip.value = self.mem.ptr-self.cs.b
+            self.process()
         self.stop_devices()
-        self.mem.offset = 0
-        return exitcode
+        return 0
     def loadbin(self, filename, dest, compressed=False):
         if not compressed:
             bindata = open(filename, 'rb').read()
@@ -776,6 +617,7 @@ class CPU(object):
             open(filename, 'wb').write(zlib.compress(self.mem.readblock(src, size)))
 
 def main_old():
+    """ Keeping this around until I migrate it over to the new format. """
     from optparse import OptionParser
     parser = OptionParser()
     parser.add_option('-f', '--filename', dest='filename', help='The binary file to execute in the virtual machine')
@@ -813,6 +655,7 @@ def main_old():
         print e
 
 def main():
+    """ In reality, main() should be application specific. """
     from optparse import OptionParser
     parser = OptionParser()
     options, args = parser.parse_args()

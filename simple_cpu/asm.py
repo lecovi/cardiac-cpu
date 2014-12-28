@@ -141,10 +141,6 @@ class Coder(Cmd):
         try:
             return int(arg)
         except:
-            pass
-        try:
-            return self.var_map[arg]
-        except:
             return 0
     def write_type(self, typ, value):
         """ This method is used to write specific type information about an integer into memory. """
@@ -160,7 +156,9 @@ class Coder(Cmd):
         if value in self.var_map:
             self.cpu.mem.write(self.var_map[value])
         elif value.startswith('&'):
-            value = int(value[1:], 16)
+            value = self.get_label(value[1:])
+            if isinstance(value, str):
+                value = int(value[1:], 16)
             if value < 4096:
                 self.write_type(4, value)
             elif value < 1048576:
@@ -209,81 +207,6 @@ class Coder(Cmd):
             return
         self.write_value(a2)
         self.write_value(a1)
-    def default_old(self, line):
-        if line.startswith('#'):
-            return False
-        if line == '.':
-            return True
-        s = shlex.split(line)
-        op, arg = s[0], ''
-        if len(s) > 1:
-            try:
-                ptr = int(s[0], 16)
-                self.ptr = ptr
-                op = s[1]
-            except:
-                arg = s[1]
-        if len(s) in [3,4]:
-            try:
-                ptr, op, arg = int(s[0], 16), s[1], s[2]
-                self.ptr = ptr
-            except:
-                pass
-        if op in self.bc0_map:
-            # This map is for simple operations that don't take any parameters.
-            self.cpu.mem.write(self.bc0_map[op])
-        elif op in self.bc16_map:
-            # This map is for operations which can take a 16-bit integer parameter.
-            self.cpu.mem.write(self.bc16_map[op])
-            if arg != '':
-                if ',' in arg:
-                    a1,a2 = arg.split(',')
-                    self.cpu.mem.write16(self.get_int(a1))
-                    self.cpu.mem.write16(self.get_int(a2))
-                else:
-                    arg = self.get_label(arg)
-                    self.cpu.mem.write16(int(arg))
-        elif op in self.bc_map:
-            # This map is for operations which can take an 8-bit integer parameter.
-            self.cpu.mem.write(self.bc_map[op][0])
-            if arg == '':
-                self.cpu.mem.write(int(self.bc_map[op][1]))
-            else:
-                self.cpu.mem.write(self.get_int(arg))
-        elif op in self.bc2_map:
-            # This map is for complex operations that support mixed parameter types, like the MOV instruction.
-            try:
-                a1,a2 = arg.split(',')
-            except:
-                self.unknown_command(line)
-                return
-            self.cpu.mem.write(self.bc2_map[op])
-            xop = UInt8()
-            if a1.startswith('&'):
-                xop.bit(0, True)
-                a1 = self.get_int(a1[1:])
-            if a2.startswith('&'):
-                xop.bit(2, True)
-                a2 = self.get_int(a2[1:])
-            if a1 in self.var_map:
-                xop.bit(1, True)
-                a1 = self.var_map[a1]
-            if a2 in self.var_map:
-                xop.bit(3, True)
-                a2 = self.var_map[a2]
-            self.cpu.mem.write(xop)
-            if isinstance(a1, str):
-                a1 = self.get_label(a1)
-                self.cpu.mem.write16(a1)
-            else:
-                self.cpu.mem.write(self.get_int(a1))
-            if isinstance(a2, str):
-                a2 = self.get_label(a2)
-                self.cpu.mem.write16(int(a2))
-            else:
-                self.cpu.mem.write(self.get_int(a2))
-        else:
-            self.unknown_command(line)
     def do_boot(self, args):
         """ Executes the code currently in memory at an optional memory pointer location. """
         if args != '':
@@ -555,6 +478,7 @@ class Coder(Cmd):
             os.chmod(s[0], 33188)
 
 def main_old():
+    """ Keeping this around until I migrate it over to the new format. """
     from optparse import OptionParser
     parser = OptionParser()
     parser.add_option('--source', dest='source', help='Compile source code file into a binary image')
