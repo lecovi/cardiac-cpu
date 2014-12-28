@@ -48,7 +48,6 @@ class Coder(Cmd):
     }
     bc_map = {
         'int':  0x1,
-        'ret':  0x1,
         'mov':  0x2,
         'in':   0x3,
         'out':  0x4,
@@ -73,6 +72,7 @@ class Coder(Cmd):
         'or':   0x17,
         'xor':  0x18,
         'not':  0x19,
+        'ret':  0x1a,
     }
     mov_map = {
         'ax':   0xa0,
@@ -84,6 +84,7 @@ class Coder(Cmd):
     intro = 'Simple CPU Assembler v0.5'
     @property
     def var_map(self):
+        """ This is a basic helper property for mapping registers. """
         _var_map = getattr(self, '_var_map', None)
         if _var_map is None:
             regs = self.cpu.var_map
@@ -97,6 +98,10 @@ class Coder(Cmd):
     def ptr(self, value):
         self.cpu.ip.value = value
     def configure(self, cpu):
+        """ 
+        This needs to be called before running cmdloop, as it configures some special options,
+        this may be either moved into __init__ in the future.
+        """
         if not isinstance(cpu, CPU):
             raise TypeError
         self.cpu = cpu
@@ -116,6 +121,7 @@ class Coder(Cmd):
         except CPUException, e:
             self.stdout.write('CPUException: %s\n' % e)
     def get_label(self, lbl, reference=True):
+        """ This method is used to translate variables in the assembly code. """
         if lbl[0] == '*':
             label = lbl[1:]
             if reference == False:
@@ -129,6 +135,7 @@ class Coder(Cmd):
             return ptr
         return lbl
     def get_int(self, arg):
+        """ This method is used to translate an argument into an integer we can write into memory. """
         if arg.startswith('h'):
             return int(arg[1:], 16)
         try:
@@ -140,9 +147,12 @@ class Coder(Cmd):
         except:
             return 0
     def write_type(self, typ, value):
+        """ This method is used to write specific type information about an integer into memory. """
         b = value&0xf
         self.cpu.mem.write(b|typ<<4)
-        if value < 4096:
+        if value < 16:
+            return
+        elif value < 4096:
             self.cpu.mem.write(value>>4)
         else:
             self.cpu.mem.write16(value>>4)
@@ -173,17 +183,23 @@ class Coder(Cmd):
         if len(s) > 1:
             try:
                 ptr = int(s[0], 16)
-                self.ptr = ptr
+                if s[0][:2] != '0x':
+                    raise
+                self.cpu.mem.ptr = ptr
                 op = s[1]
             except:
                 arg = s[1]
         if len(s) in [3,4]:
             try:
                 ptr, op, arg = int(s[0], 16), s[1], s[2]
-                self.ptr = ptr
+                if s[0][:2] != '0x':
+                    raise
+                self.cpu.mem.ptr = ptr
             except:
                 pass
-        print self.bc_map[op]
+        if op not in self.bc_map:
+            self.unknown_command(line)
+            return
         self.cpu.mem.write(self.bc_map[op])
         try:
             a1,a2 = arg.split(',')
@@ -412,7 +428,7 @@ class Coder(Cmd):
         """ Convert a decimal number to a hex. """
         if args != '':
             self.stdout.write('%s\n' % hex(int(args)))
-    def do_dec(self, args):
+    def do_decimal(self, args):
         """ Convert a hexidecimal number to decimal. """
         if args != '':
             self.stdout.write('%s\n' % int(args, 16))
@@ -583,6 +599,8 @@ def main():
     cli = Coder()
     cli.configure(c)
     c.start_devices()
+    if len(sys.argv) > 1:
+        cli.do_source(sys.argv[1])
     try:
         cli.cmdloop()
     except CPUException, e:

@@ -122,7 +122,7 @@ class MemoryMap(object):
     def mem_write(self, addr, byte=None):
         if not self.__write:
             raise MemoryProtectionError('Attempted to write to protected memory space: %s' % addr)
-        if byte:
+        if byte is not None:
             self.__check_addr(addr)
             if isinstance(byte, int):
                 byte = chr(byte)
@@ -260,7 +260,7 @@ class MemoryController(object):
     def read16(self, addr):
         return self[addr]|self[addr+1]<<8
     def write16(self, addr, word=None):
-        if word:
+        if word is not None:
             self[addr] = word&0xFF
             self[addr+1] = word>>8
         else:
@@ -345,18 +345,18 @@ class CPU(object):
         if regs is None:
             regs = self.regs.pushable
         for reg in regs:
-            self.mem[self.ss+self.sp] = getattr(self.regs, reg)
+            self.mem.write16(self.ss+self.sp, getattr(self.regs, reg).b)
             self.sp.value += 2
     def pop_registers(self, regs=None):
         if regs is None:
             regs = self.regs.pushable.reverse()
         for reg in regs:
             self.sp.value -= 2
-            getattr(self.regs, reg).value = self.mem[self.ss+self.sp:self.ss+self.sp+2]
+            getattr(self.regs, reg).value = self.mem.read16(self.ss+self.sp)
     def push_value(self, value):
         try:
             value = int(value)
-            self.mem[self.ss+self.sp] = value
+            self.mem.write16(self.ss+self.sp,value)
             self.sp.value += 2
         except:
             self.mem.ptr = self.ds
@@ -366,7 +366,7 @@ class CPU(object):
     def pop_value(self):
         if self.sp.value > 0:
             self.sp.value -= 2
-            return self.mem[self.ss+self.sp:self.ss+self.sp+2]
+            return self.mem.read16(self.ss+self.sp)
         raise CPUException('Stack out of range.')
     def get_xop(self, dst=None, errmsg='Internal value error.'):
         """ This handy function to translate the xop code and return a proper integer from the source. """
@@ -416,7 +416,7 @@ class CPU(object):
         if valid is not None and dst[0] not in valid:
             raise CPUException('Attempted to place data in invalid location for specific operation.')
         typ, dst = dst
-        if typ == 1:
+        if typ == 0:
             dst.value = src
         elif typ in (4,5,):
             if src < 256:
@@ -443,9 +443,6 @@ class CPU(object):
     def process(self):
         """ Processes a single bytecode. """
         self.mem.ptr = self.cs+self.ip
-        print self.mem.ptr
-        if self.mem.ptr > 50:
-            raise
         op = self.fetch()
         if self.__opcodes.has_key(op):
             if not self.__opcodes[op]():
@@ -455,95 +452,143 @@ class CPU(object):
     def opcode_0x0(self):
         pass # NOP
     def opcode_0x1(self):
-        """ INT/RET """
-        i = self.fetch()
-        if i > 0:
-            self.ip.value = self.mem.ptr-self.cs
-            self.push_registers(['cs', 'ip'])
-            jmp = self.mem[i*2+self.int_table:i*2+self.int_table+2]
-            self.regs.cs.value = jmp
-            self.ip.value = 0
-        else:
-            self.pop_registers(['ip', 'cs'])
+        """ INT """
+        i = self.get_value()[1]
+        self.ip.value = self.mem.ptr-self.cs
+        self.push_registers(['cs', 'ip'])
+        jmp = self.mem[i*2+self.int_table:i*2+self.int_table+2]
+        self.regs.cs.value = jmp
+        self.ip.value = 0
         return True
     def opcode_0x2(self):
         """ MOV """
         src = self.get_value()[1]
         dst = self.get_value(False)
-        print src,dst[0],dst
         self.set_value(dst, src)
     def opcode_0x3(self):
         """ IN """
         src = self.get_value()[1]
-        typ, dst = self.get_value(False)
+        dst = self.get_value(False)
         if self.cpu_hooks.has_key(src):
-            dst.value = self.cpu_hooks[src].input(src)
+            self.set_value(dst, self.cpu_hooks[src].input(src))
     def opcode_0x4(self):
         """ OUT """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value()[1]
+        if self.cpu_hooks.has_key(dst):
+            self.cpu_hooks[dst].output(dst, src)
     def opcode_0x5(self):
         """ HLT """
         self.running = False
     def opcode_0x6(self):
         """ JMP """
-        pass
+        self.mem.ptr = self.cs.b+self.get_value()[1]
     def opcode_0x7(self):
         """ PUSH """
-        pass
+        typ, src = self.get_value()
+        if typ == 0:
+            self.push_value(src)
+        else:
+            raise CPUException('Attempt to PUSH a non-register.')
     def opcode_0x8(self):
         """ POP """
-        pass
+        dst = self.get_value(False)
+        self.set_value(dst, self.pop_value(), [0])
     def opcode_0x9(self):
         """ CALL """
-        pass
+        jmp = self.cs.b+self.get_value()[1]
+        self.ip.value = self.mem.ptr-self.cs.b
+        self.push_registers(['cs', 'ip'])
+        self.mem.ptr = jmp
     def opcode_0xa(self):
         """ INC """
-        pass
+        typ, src = self.get_value(False)
+        if typ == 0:
+            src.value +=1
+        else:
+            raise CPUException('Attempt to increment a non-register.')
     def opcode_0xb(self):
         """ DEC """
-        pass
+        typ, src = self.get_value(False)
+        if typ == 0:
+            src.value -=1
+        else:
+            raise CPUException('Attempt to decrement a non-register.')
     def opcode_0xc(self):
         """ ADD """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        self.set_value(dst, src+dst[1].b)
     def opcode_0xd(self):
         """ SUB """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        self.set_value(dst, dst[1].b-src)
     def opcode_0xe(self):
         """ TEST """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value()[1]
+        self.flags.bit(0, src == dst)
     def opcode_0xf(self):
         """ JE """
-        pass
+        jmp = self.get_value()[1]
+        if self.flags.bit(0):
+            self.mem.ptr = self.cs.b+jmp
     def opcode_0x10(self):
         """ JNE """
-        pass
+        jmp = self.get_value()[1]
+        if not self.flags.bit(0):
+            self.mem.ptr = self.cs.b+jmp
     def opcode_0x11(self):
         """ CMP """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value()[1]
+        result = src - dst
+        self.flags.bit(0, True if result == 0 else False)
     def opcode_0x12(self):
         """ MUL """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        self.set_value(dst, dst[1].b*src)
     def opcode_0x13(self):
         """ DIV """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        self.set_value(dst, dst[1].b/src)
     def opcode_0x14(self):
         """ PUSHF """
-        pass
+        self.push_value(self.flags.b)
     def opcode_0x15(self):
         """ POPF """
-        pass
+        self.flags.value = self.pop_value()
     def opcode_0x16(self):
         """ AND """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        v = self.resolve(*dst)
+        self.set_value(dst, v & src, [0])
     def opcode_0x17(self):
         """ OR """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        v = self.resolve(*dst)
+        self.set_value(dst, v | src, [0])
     def opcode_0x18(self):
         """ XOR """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        v = self.resolve(*dst)
+        self.set_value(dst, v ^ src, [0])
     def opcode_0x19(self):
         """ NOT """
-        pass
+        src = self.get_value()[1]
+        dst = self.get_value(False)
+        v = self.resolve(*dst)
+        self.set_value(dst, v & ~src, [0])
+    def opcode_0x1a(self):
+        """ RET """
+        self.pop_registers(['ip', 'cs'])
+        return True
     def run(self, cs=0, persistent=[]):
         self.clear_registers(persistent)
         self.cs.value = cs
