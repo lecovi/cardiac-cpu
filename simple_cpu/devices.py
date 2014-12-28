@@ -24,12 +24,9 @@ class BaseCPUDevice(object):
     def output(self, i, v):
         func = self.get_handler(i, 'out')
         func(v)
-    def cycle(self, port):
-        try:
-            func = self.get_handler(port, 'cycle')
-            func()
-        except InvalidInterrupt:
-            pass
+    def cycle(self):
+        """ If this is overridden, it is called on every CPU cycle so that the device can do something. """
+        pass
     def start(self):
         """ If this is overridden, it is called during the CPU boot-up sequence to initialize the actual device. """
         pass

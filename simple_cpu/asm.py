@@ -1,7 +1,8 @@
 from cmd import Cmd
-from cpu import CPU, UInt8, CPUException, UInt16
+from cpu import CPU, CPUException, UInt16
 import shlex, readline, os, sys
 from simple_cpu.devices import ConIOHook, HelloWorldHook
+#from simple_cpu.framebuffer import VGAConsoleDevice
 
 class Coder(Cmd):
     """
@@ -520,6 +521,7 @@ def main():
     c = CPU()
     c.add_device(ConIOHook)
     c.add_device(HelloWorldHook)
+    #c.add_device(VGAConsoleDevice)
     cli = Coder()
     cli.configure(c)
     c.start_devices()
