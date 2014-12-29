@@ -2,7 +2,10 @@ from cmd import Cmd
 from cpu import CPU, CPUException, UInt16
 import shlex, readline, os, sys
 from simple_cpu.devices import ConIOHook, HelloWorldHook
-#from simple_cpu.framebuffer import VGAConsoleDevice
+try:
+    from simple_cpu.framebuffer import VGAConsoleDevice
+except ImportError:
+    VGAConsoleDevice = None
 
 class Coder(Cmd):
     """
@@ -126,10 +129,10 @@ class Coder(Cmd):
         if lbl[0] == '*':
             label = lbl[1:]
             if reference == False:
-                return self.labels[lbl[1:]][0]
+                return self.labels[label][0]
             elif label in self.labels:
                 self.labels[label][1].append(self.ptr)
-                ptr = self.labels[lbl[1:]][0]
+                ptr = self.labels[label][0]
             else:
                 self.labels[label] = [0,[self.ptr]]
                 ptr = 0
@@ -139,6 +142,8 @@ class Coder(Cmd):
         """ This method is used to translate an argument into an integer we can write into memory. """
         if arg.startswith('h'):
             return int(arg[1:], 16)
+        elif arg.startswith('*'):
+            return self.get_label(arg)
         try:
             return int(arg)
         except:
@@ -478,61 +483,52 @@ class Coder(Cmd):
             readline.write_history_file(s[0])
             os.chmod(s[0], 33188)
 
-def main_old():
-    """ Keeping this around until I migrate it over to the new format. """
+def main():
     from optparse import OptionParser
     parser = OptionParser()
     parser.add_option('--source', dest='source', help='Compile source code file into a binary image')
-    parser.add_option('--ds', '--dataseg', type='int', dest='ds', default=3000, help='Set a custom data segment')
-    parser.add_option('--ss', '--stackseg', type='int', dest='ss', default=2900, help='Set a custom stack segment')
-    parser.add_option('--it', '--inttable', dest='inttbl', default='interrupt.tbl', help='Use a custom interrupt table')
-    parser.add_option('--ib', '--intbin', dest='intbin', default='interrupt.bin', help='Use a custom interrupt binary')
-    parser.add_option('--iba', '--intaddr', type='int', dest='intaddr', default=1000, help='Set a custom address for the interrupt binary')
+    parser.add_option('-o', '--output', dest='output', help='Specify a filename for the assembled binary image')
     parser.add_option('-c', '--cli', action='store_true', dest='cli', default=False, help='Start the command-line assembler/debugger')
+    parser.add_option('--vgaconsole', action='store_true', dest='enable_vga', default=False, help='Enable the VGAConsole framebuffer device')
     options, args = parser.parse_args()
-    del args
-    c = CPU()
-    c.loadbin(options.inttbl, len(c.mem)-512)
-    c.loadbin(options.intbin, options.intaddr)
-    c.add_cpu_hook(HelloWorldHook)
-    c.ds.value = options.ds
-    c.ss.value = options.ss
+    source = None
+    if len(args) > 1:
+        parser.error('You can only supply a single source file.')
+    if len(args) > 0:
+        source = args[0]
     if options.source:
-        try:
-            source = open(options.source, 'r').readlines()
-        except:
-            parser.error('Source file not found.')
-            sys.exit(1)
-        cli = Coder()
-        cli.configure(c)
-        for line in source:
-            cli.cmdqueue.append(line)
-        cli.cmdqueue.append('.')
-        cli.cmdloop('Assembling %s...' % options.source)
-        fname = options.source.split('.')
-        c.savebin('%s.bin' % fname[0], 0, c.mem.ptr)
-        sys.exit(0)
-    elif options.cli:
-        cli = Coder()
-        cli.configure(c)
-        cli.cmdloop()
-
-def main():
+        if source is not None:
+            parser.error('You can only supply a single source file.')
+        source = options.source
     c = CPU()
-    c.add_device(ConIOHook)
-    c.add_device(HelloWorldHook)
-    #c.add_device(VGAConsoleDevice)
     cli = Coder()
     cli.configure(c)
-    c.start_devices()
-    if len(sys.argv) > 1:
+    if source is not None:
         cli.do_source(sys.argv[1])
-    try:
-        cli.cmdloop()
-    except CPUException, e:
-        sys.stderr.write('%s\n' % e)
-    finally:
-        c.stop_devices()
+        cli.cmdqueue.append('.')
+        cli.cmdloop('Assembling %s...' % source)
+        if options.output:
+            fname = options.output
+        else:
+            fname = '%s.bin' % source.split('.')[0]
+        c.savebin(fname, 0, c.mem.ptr)
+    elif options.cli:
+        c.add_device(ConIOHook)
+        c.add_device(HelloWorldHook)
+        if options.enable_vga:
+            if VGAConsoleDevice:
+                c.add_device(VGAConsoleDevice)
+            else:
+                parser.error('Please download and install VGAConsole from https://bitbucket.org/kveroneau/pygame-vgaconsole/')
+        c.start_devices()
+        try:
+            cli.cmdloop()
+        except CPUException, e:
+            sys.stderr.write('%s\n' % e)
+        finally:
+            c.stop_devices()
+    else:
+        parser.error('Please specify a command-line option.')
 
 if __name__ == '__main__':
     main()
