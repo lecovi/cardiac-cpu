@@ -90,6 +90,7 @@ class UInt32(Unit):
     fmt = 'L'
 
 class MemoryMap(object):
+    """ This class controls a segment of memory. """
     def __init__(self, size):
         self.mem = mmap.mmap(-1, size)
         self.size = size
@@ -107,18 +108,28 @@ class MemoryMap(object):
             raise TypeError('Type %s is not valid here.' % type(addr))
         if addr < 0 or addr > self.size-1:
             raise IndexError
+    def __getitem__(self, addr):
+        return self.read(addr)
+    def __setitem__(self, addr, byte):
+        self.write(addr, byte)
     def fetch(self):
         if not self.__execute:
             raise MemoryProtectionError('Attempted to execute code from protected memory space!')
         return ord(self.mem.read(1))
-    def mem_read(self, addr=None):
+    def fetch16(self):
+        return self.fetch()|self.fetch()<<8
+    def read(self, addr=None):
         if not self.__read:
             raise MemoryProtectionError('Attempted to read from protected memory space: %s' % addr)
         if addr is not None:
             self.__check_addr(addr)
             return ord(self.mem[addr])
         return ord(self.mem.read(1))
-    def mem_write(self, addr, byte=None):
+    def read16(self, addr=None):
+        if addr is not None:
+            return self.read(addr)|self.read(addr+1)<<8
+        return self.read()|self.read()<<8
+    def write(self, addr, byte=None):
         if not self.__write:
             raise MemoryProtectionError('Attempted to write to protected memory space: %s' % addr)
         if byte is not None:
@@ -130,6 +141,13 @@ class MemoryMap(object):
             if isinstance(addr, int):
                 addr = chr(addr)
             self.mem.write(addr)
+    def write16(self, addr, word=None):
+        if word is not None:
+            self.write(addr,word&0xFF)
+            self.write(addr+1,word>>8)
+        else:
+            self.write(addr&0xFF)
+            self.write(addr>>8)
     def readblock(self, addr, size):
         self.mem.seek(addr)
         return self.mem.read(size)
@@ -220,7 +238,7 @@ class MemoryController(object):
     def bank(self, value):
         self.__bank = value
     def add_map(self, block, memory):
-        if not getattr(memory, 'mem_read', None):
+        if not getattr(memory, 'read', None):
             raise
         self.__map.update({block:memory})
     @property
@@ -234,11 +252,11 @@ class MemoryController(object):
     def fetch(self):
         return self.__map[self.__bank].fetch()
     def fetch16(self):
-        return self.__map[self.__bank].fetch()|self.__map[self.__bank].fetch()<<8
+        return self.__map[self.__bank].fetch16()
     def read(self, addr):
         ha = (addr>>self.__habit)&self.__blksize
         try:
-            return self.__map[ha].mem_read(addr&self.__bitmask)
+            return self.__map[ha].read(addr&self.__bitmask)
         except:
             raise
     def write(self, addr, byte=None):
@@ -247,11 +265,11 @@ class MemoryController(object):
                 byte = byte.b
             ha = (addr>>self.__habit)&self.__blksize
             try:
-                self.__map[ha].mem_write(addr&self.__bitmask, byte)
+                self.__map[ha].write(addr&self.__bitmask, byte)
             except:
                 raise
         else:
-            self.__map[self.__bank].mem_write(addr)
+            self.__map[self.__bank].write(addr)
     def __getitem__(self, addr):
         return self.read(addr)
     def __setitem__(self, addr, byte):
@@ -263,8 +281,8 @@ class MemoryController(object):
             self[addr] = word&0xFF
             self[addr+1] = word>>8
         else:
-            self.__map[self.__bank].mem_write(addr&0xFF)
-            self.__map[self.__bank].mem_write(addr>>8)
+            self.__map[self.__bank].write(addr&0xFF)
+            self.__map[self.__bank].write(addr>>8)
     def readblock(self, addr, size):
         ha = (addr>>self.__habit)&self.__blksize
         try:
@@ -292,3 +310,4 @@ class MemoryController(object):
         ha = (src>>self.__habit)&self.__blksize
         self.memcopy(src, dest, size)
         self.__map[ha].clearblock(dest&self.__bitmask, size)
+    

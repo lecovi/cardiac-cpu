@@ -1,4 +1,4 @@
-import sys, zlib, struct
+import sys, zlib
 from simple_cpu.exceptions import CPUException
 from simple_cpu.devices import ConIOHook, HelloWorldHook
 from simple_cpu.memory import UInt16, UInt8, MemoryController, IOMap, MemoryMap
@@ -77,27 +77,6 @@ class CPU(object):
             self.sp.value -= 2
             return self.mem.read16(self.ss+self.sp)
         raise CPUException('Stack out of range.')
-    def get_xop(self, dst=None, errmsg='Internal value error.'):
-        """ This handy function to translate the xop code and return a proper integer from the source. """
-        xop = self.mem.read()
-        if dst is not None:
-            if not xop.bit(dst):
-                raise CPUException(errmsg)
-        xop_map = {1:'<HH', # MEM,IMED
-                   2:'<BH', # REG,IMED
-                   5:'<HH', # MEM,MEM
-                   6:'<BH', # REG,MEM
-                   9:'<HB', # MEM,REG
-                   10:'<BB' # REG,REG
-        }
-        dst,src = struct.unpack(xop_map[xop.b], self.mem.read(struct.calcsize(xop_map[xop.b])))
-        if xop.bit(3):
-            # Register is source.
-            src = getattr(self, self.var_map[src]).b
-        elif xop.bit(2):
-            # Memory address is the source.
-            src = self.mem[self.ds.b+src].b
-        return xop,dst,src
     def resolve(self, typ, value):
         if typ == 0:
             value = value.b

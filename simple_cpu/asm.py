@@ -1,5 +1,5 @@
 from cmd import Cmd
-from cpu import CPU, CPUException, UInt16
+from simple_cpu.cpu import CPU, CPUException, UInt16
 import shlex, readline, os, sys
 from simple_cpu.devices import ConIOHook, HelloWorldHook
 try:
@@ -213,6 +213,12 @@ class Coder(Cmd):
             return
         self.write_value(a2)
         self.write_value(a1)
+    def do_shell(self, args):
+        """ Executes a Python command. """
+        try:
+            print eval(args)
+        except:
+            print sys.exc_info()[1]
     def do_boot(self, args):
         """ Executes the code currently in memory at an optional memory pointer location. """
         if args != '':
@@ -485,7 +491,7 @@ class Coder(Cmd):
 
 def main():
     from optparse import OptionParser
-    parser = OptionParser()
+    parser = OptionParser('%prog -c|-o OUTPUT SOURCE')
     parser.add_option('--source', dest='source', help='Compile source code file into a binary image')
     parser.add_option('-o', '--output', dest='output', help='Specify a filename for the assembled binary image')
     parser.add_option('-c', '--cli', action='store_true', dest='cli', default=False, help='Start the command-line assembler/debugger')
